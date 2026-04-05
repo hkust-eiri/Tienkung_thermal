@@ -1,0 +1,42 @@
+# 腿部温度向量 T_leg 的下标与名称映射
+#
+# 关节顺序的权威来源：TienKung-Lab（以 ultra_env.py 中 find_joints 为准）。
+# 本文件与 TienKung-Lab/legged_lab/envs/ultra/ultra_env.py 的 left_leg_ids / right_leg_ids 保持一致，供 Tienkung_thermal 工程引用。
+#
+# Ultra（Isaac / MuJoCo）关节名与顺序：
+#   每侧：hip_roll → hip_yaw → hip_pitch → knee_pitch → ankle_pitch → ankle_roll
+#
+# 若对接 Deploy_Tienkung（bodyIdMap 为 roll → pitch → yaw → knee → …），需对髋部三轴
+# 做重排，勿直接按下标混用两套数据。
+
+n_leg_motors: 12
+
+# 顺序即 T_leg[0]..T_leg[11]；关节名与 Ultra USD/MJCF 中 joint name 一致（*_joint）
+motor_names:
+  - hip_roll_l_joint
+  - hip_yaw_l_joint
+  - hip_pitch_l_joint
+  - knee_pitch_l_joint
+  - ankle_pitch_l_joint
+  - ankle_roll_l_joint
+  - hip_roll_r_joint
+  - hip_yaw_r_joint
+  - hip_pitch_r_joint
+  - knee_pitch_r_joint
+  - ankle_pitch_r_joint
+  - ankle_roll_r_joint
+
+# Deploy（TG22）腿段名称，仅作交叉参考；与上表顺序不同（髋为 roll–pitch–yaw）
+# deploy_motor_names_reference:
+#   - l_hip_roll
+#   - l_hip_pitch
+#   - l_hip_yaw
+#   - l_knee
+#   - l_ankle_pitch
+#   - l_ankle_roll
+#   - r_hip_roll
+#   - r_hip_pitch
+#   - r_hip_yaw
+#   - r_knee
+#   - r_ankle_pitch
+#   - r_ankle_roll

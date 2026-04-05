@@ -1,0 +1,35 @@
+# 温度预测模型与训练/推理共用约定
+
+model:
+  name: mlp_thermal
+  hidden_dims: [128, 128]
+  dropout: 0.0
+
+features:
+  # 输入特征组（名称约定，实现见 datasets）
+  include:
+    - T_leg_history      # (history_len, n_leg_motors)
+    - q_leg              # 可选，当前腿关节位置
+    - qdot_leg           # 可选
+    - tau_leg            # 可选
+    - command_vel        # 可选，3 维速度指令（与 Lab 一致时）
+  history_len: 5
+  n_leg_motors: 12      # 须与 leg_index_mapping.yaml 一致
+
+targets:
+  # 预测目标：下一步或多步温度
+  horizon_steps: 1
+  predict: T_leg_delta  # 或 T_leg_next
+
+normalization:
+  stats_path: null      # 填 stats.npz 或 JSON 路径，lab_hooks 同步引用
+
+training:
+  batch_size: 256
+  lr: 1.0e-3
+  epochs: 100
+  device: cuda
+
+deploy:
+  target_hz: null       # 与 Deploy dt 对齐时填写，如 400.0
+  decimation: null      # 与 Lab decimation 对齐时填写
