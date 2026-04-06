@@ -1,13 +1,15 @@
 # 腿部温度向量 T_leg 的下标与名称映射
 #
-# 关节顺序的权威来源：TienKung-Lab（以 ultra_env.py 中 find_joints 为准）。
-# 本文件与 TienKung-Lab/legged_lab/envs/ultra/ultra_env.py 的 left_leg_ids / right_leg_ids 保持一致，供 Tienkung_thermal 工程引用。
-#
-# Ultra（Isaac / MuJoCo）关节名与顺序：
-#   每侧：hip_roll → hip_yaw → hip_pitch → knee_pitch → ankle_pitch → ankle_roll
-#
-# 若对接 Deploy_Tienkung（bodyIdMap 为 roll → pitch → yaw → knee → …），需对髋部三轴
-# 做重排，勿直接按下标混用两套数据。
+# ========== 硬性准则（Ultra 为准）==========
+# - 训练、落盘、评估、在线推理中的 T_leg[0..11] **唯一**以 **Ultra** 关节顺序为准：
+#   与 TienKung-Lab/legged_lab/envs/ultra/ultra_env.py 中 left_leg_ids / right_leg_ids
+#   的 find_joints(name_keys) 顺序一致（本文件 motor_names 与之对齐）。
+# - 每侧顺序：hip_roll → hip_yaw → hip_pitch → knee_pitch → ankle_pitch → ankle_roll
+#   （髋部为 R–Y–P；与 Deploy bodyIdMap 腿向量髋部 R–P–Y **不一致**）。
+# - Deploy_Tienkung 仅提供原始话题与中间向量下标 j；**禁止**用 Deploy 腿向量下标 j
+#   直接当作 T_leg[i]**。必须先按关节语义名（或 CAN id→名）映射到 Ultra 槽位 i，再
+#   写入/读取 T_leg[i]；ct_scale[j] 等亦须与「Deploy 中间向量 j」对齐后再置换到 Ultra 第 i 路。
+# ==========================================
 
 n_leg_motors: 12
 

@@ -821,6 +821,8 @@ ThermalManagement/
 
 ## 附录 A: 关节-电机类型映射表
 
+> **说明（Ultra 专项）**：本附录为历史 **G1 / 全身索引** 示例，**不**用作天工 Ultra **12 腿** `T_leg[0..11]` 编号。Ultra 腿部顺序**唯一**以 `plan.md` §1.2 与 `configs/leg_index_mapping.yaml`（与 `ultra_env.py` 一致）为准。
+
 | 电机类型 | 关节索引 | 关节名称 |
 |:---------|:---------|:---------|
 | **GearboxL** | 3 | LeftKnee |

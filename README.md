@@ -37,10 +37,19 @@ tienkung-thermal @ file:///absolute/path/to/tienkung_thermal
 - 话题名（示例）：`/leg/status`
 - 与 `configs/leg_index_mapping.yaml` 中 **`motor_name` → 列顺序** 一致，便于与 `Temperature` 向量对齐。
 
+## P0 实机确认脚本
+
+`scripts/check/p0_check.py` **仅在实机**（已 `source` ROS2、`/leg/status` 有数据）运行，用于 `ros2 interface show` 与话题样本核对；**不**扫描三仓库源码。说明见 `docs/todo.md`「P0 核对脚本」。
+
+```bash
+python scripts/check/p0_check.py
+python scripts/check/p0_check.py --dt 0.0025   # 可选：与 tg22_config 的 dt 对比消息间隔
+```
+
 ## 与 TienKung-Lab 的版本约定
 
 - **Python**：与 Lab 一致建议 **≥3.10**（Lab README 为 3.10）。
-- **关节顺序**：Lab 中 Ultra / TienKung2 Lite 的腿索引与 Deploy `bodyIdMap` **可能不同**；本包以 **`configs/leg_index_mapping.yaml`** 为单一真源，训练与 `lab_hooks` 只引用该映射，不硬编码 Ultra/TG22 混用顺序。
+- **关节顺序（硬性）**：**Ultra**（`TienKung-Lab` 的 `ultra_env.py` 中腿 `find_joints` 顺序）为 **`T_leg[0..11]` 唯一准则**；`configs/leg_index_mapping.yaml` 与之对齐。Deploy `bodyIdMap` 腿向量顺序不同，**禁止**按下标与 `T_leg` 混用，须按关节语义映射后再接入训练/落盘。
 - **观测拼接**：`tienkung_thermal/lab_hooks/` 仅描述 **拼接维度、历史长度、归一化统计量路径**；具体改 `UltraEnv.compute_observations` 等需在 Lab 侧按约定接入（本包不强制改 Lab 源码）。
 
 ## 与 Deploy_Tienkung 的版本约定
