@@ -214,8 +214,22 @@
 ## 5. 数据集采集协议
 
 * **录制**：至少 `/leg/status`（及若使用 IMU 上下文则 `/imu/status`）；与插件一致的字段。  
+* **ROS 2 `ros2 bag record` 示例**（实机已 `source` 工作空间、topic 在播；输出目录按需修改）：  
+  * 仅腿部状态（含每关节 `temperature`）：
+
+```bash
+ros2 bag record -o ~/bags/thermal_leg_$(date +%Y%m%d_%H%M%S) /leg/status
+```
+
+  * 腿部 + IMU（与 §2.1.3 可选上下文一致）：
+
+```bash
+ros2 bag record -o ~/bags/thermal_leg_imu_$(date +%Y%m%d_%H%M%S) /leg/status /imu/status
+```
+
 * **映射**：Deploy `index` / `bodyIdMap` 名称 → **Ultra** 顺序的 `T_leg[0..11]`（固定语义映射表，写入采集代码注释；**Ultra 为准**）。  
-* **工况矩阵、时长、冷却段**：同前版 §5.2–5.3；**室温**属 §1.5 外设记录，可保留为实验笔记，**不**声称来自两仓库接口。
+* **工况矩阵、时长、冷却段**：同前版 §5.2–5.3；**室温**属 §1.5 外设记录，可保留为实验笔记，**不**声称来自两仓库接口。  
+* **实操流程与 session 设计**：分步检查清单、`ros2 bag record` 用法、建议工况类型与 Train/Val/Test 衔接见 **`docs/recording_operations.md`**。
 
 ---
 
