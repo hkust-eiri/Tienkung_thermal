@@ -2,9 +2,10 @@
 
 ## 文档目的
 
-本文件列出：**在把采集、训练、在线推理写进代码之前**，必须通过实机、`ros2 interface show`、Deploy 源码或日志**核实**的参数与接口。
+本文件列出：**在把采集、训练、在线推理写进代码之前**，必须通过实机 bag 统计、`ros2 interface show` 或物理对照**核实**的参数与接口。
 
-- **原则**：与 `plan.md` §0–§1.5、`task_memory.md` §3 一致——两仓库未写明的字段不得默认存在。电机温度 **`MotorStatus.temperature`** 的类型与 **°C** 单位已在 **`TienKung_ROS`** `MotorStatus.msg` 与 `plan.md` §0 **确定**；实机仍以 bag / `interface show` 做一致性抽查。
+- **权威来源**（`plan.md` §0）：**事实数据**以 `data/bags/` 中 rosbag2 为准；**消息定义与解码**以 `Tienkung/ros2ws` 为唯一权威。`Deploy_Tienkung` 仅作历史行为参考，不作为消息 IDL 或 bag 字节语义的强制来源。
+- **原则**：与 `plan.md` §0–§1.5、`task_memory.md` §3 一致——`ros2ws` `.msg` 中未定义的字段不得默认存在。电机温度 **`MotorStatus.temperature`** 的类型与 **°C** 单位已在 **`Tienkung/ros2ws`** `MotorStatus.msg` 与 `plan.md` §0 **确定**；实机仍以 bag / `interface show` 做一致性抽查。
 - **用法**：自上而下按 **P0 → P1 → P2** 勾选；P0 未完成前，不建议大规模录数或锁死 HDF5 schema。
 - **记录建议**：每勾一项，在团队 wiki 或 PR 里补一行「结论 + 证据」（接口输出截图、bag 统计、`interface show` 粘贴）。
 
@@ -26,11 +27,11 @@
 
 P0 解决三件事：**（1）消息里到底有什么字段、什么类型**；**（2）第 `i` 个训练槽位是否真是 `T_leg[i]` 那条腿**；**（3）`current × ct_scale` 是否真是可用的力矩代理、时间步长怎么取**。任何一条错了，LSTM 学的是噪声或错标签。
 
-### P0 两仓库静态可答项（`Deploy_Tienkung` / `TienKung-Lab`）
+### P0 静态可答项（历史参考 + ros2ws）
 
-以下仅通过**阅读两仓库源码与配置**可归纳的结论，用于勾 P0 时对照；**不能**替代实机 `ros2 interface show`、bag 统计与物理对照。路径均相对各仓库根目录。
+以下通过**阅读 `Tienkung/ros2ws` 消息定义与 Deploy 仓库源码**可归纳的结论，用于勾 P0 时对照；**不能**替代实机 bag 统计与物理对照。Deploy 部分**仅作历史行为参考**，消息字段与取值以 **bag + `Tienkung/ros2ws`** 为准（`plan.md` §0）。
 
-**`Deploy_Tienkung`**
+**`Deploy_Tienkung`（历史行为参考，非 IDL 权威）**
 
 | P0 TODO 主题 | 静态可答内容 | 证据位置 |
 |:-------------|:-------------|:---------|
@@ -78,10 +79,10 @@ P0 解决三件事：**（1）消息里到底有什么字段、什么类型**；
 | `Imu` 中 `euler` 单位（与 P1 相关） | **`bodyctrl_msgs/Euler`**：`roll`/`pitch`/`yaw` 为 **`float64`**；Xsens 插件中 **`/180*pi` → 发布为弧度**（该路径见 `XSensImuPlugin.cpp`，若 Deploy 用另一 IMU 插件需单独核对） | `Imu.msg`、`Euler.msg`、`body_control/.../XSensImuPlugin.cpp` |
 | 消息是否只含腿 | **IDL 不区分身体部位**；`status` 长度 = 当帧聚合进来的电机数。**腿 12 路须按 `name`∈{`MOTOR_LEG_*`} 过滤**，不能假定「前 12 条即腿」 | `MotorName.msg` 枚举 + 变长 `status[]` |
 
-**TienKung_ROS 仍无法仅由仓库回答的**
+**仍须以 bag 或实机核对的**
 
-- 与 **Deploy_Tienkung** 当前编译的 `bodyctrl_msgs` 是否**字节级一致**（需 `ros2 interface show` 或对比 commit）。
-- **`/leg/status` 话题名**在 TienKung_ROS 的 `BodyControlPlugin` 里可见 `motor_state` 等（ROS1 风格）；**ROS2 + `/leg/status`** 以你方 **Deploy** 配置为准，本仓库不替代实机图。
+- 实机运行的 `bodyctrl_msgs` 与 **`Tienkung/ros2ws`** 中版本是否一致（需 `ros2 interface show` 或对比 commit；以 `ros2ws` 为权威，`plan.md` §0）。
+- **`/leg/status` 话题名**以实机 `ros2 topic list` 与 bag 内记录为准；Deploy 仅作历史参考。
 
 ### P0 核对脚本（`scripts/check/p0_check.py`）
 

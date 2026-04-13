@@ -1,9 +1,10 @@
 # TienKung Ultra 腿部热建模 — 任务记忆（关键信息汇总）
 
 > **关节顺序（唯一准则）**：以 **Ultra** 为准（`TienKung-Lab/legged_lab/envs/ultra/ultra_env.py` 中 `find_joints`）；**禁止**用 Deploy 腿向量下标代替 `T_leg[i]`。  
-> **数据**：**仅**使用 **`Deploy_Tienkung`** 与 **`TienKung-Lab`** 两仓库内**已定义**的接口（源码/配置/README/注释中的布局）；其余一律为 **待获取备选**，不得默认存在。  
+> **权威接口收紧**：**事实数据**以 **`Tienkung_thermal/data/bags/`** 中 rosbag2 为准；**消息定义与 CDR 解码**以 **`Tienkung/ros2ws`**（如 `install/bodyctrl_msgs/...`）为准。若与 **`Deploy_Tienkung`** 旧版源码冲突，**以 bag + ros2ws 为准**；Deploy 仅作可选行为参考。  
+> **仿真与布局**：**TienKung-Lab** 仍用于 Ultra 关节顺序、任务名与 HDF5/时序方法论；**无**与实机一致的温度监督。  
 > 详细条款见 `Tienkung_thermal/docs/plan.md` §0、§1。  
-> **`temperature` 单位**：**摄氏度 (°C)**，类型 **`float32` 单标量**；IDL 见 **`TienKung_ROS`** `src/bodyctrl_msgs/msg/MotorStatus.msg`，解码见同仓库 `MotorDevice.cpp`（与 `plan.md` §0 一致）。
+> **`temperature` 单位**：**摄氏度 (°C)**，类型 **`float32` 单标量**；IDL 以 **`Tienkung/ros2ws`** 中 `MotorStatus.msg` 为准（与 `plan.md` §0 一致）。
 
 ---
 
@@ -21,7 +22,18 @@
 
 ## 2. 准许使用的数据（白名单）
 
-### 2.1 Deploy_Tienkung（`RLControlNewPlugin.cpp` + `tg22_config.yaml` + `bodyIdMap.h`）
+### 2.0 权威来源（优先）
+
+| 类别 | 权威路径 | 说明 |
+|:-----|:---------|:-----|
+| 实机观测真值 | `Tienkung_thermal/data/bags/`（rosbag2） | 训练/导出以 bag 内消息为准 |
+| 消息字段与解码 | `Tienkung/ros2ws`（`bodyctrl_msgs` 等 `install/.../share/.../msg`） | `--msg-package`、类型与 `plan.md` 字段表均对齐此处 |
+| Ultra 关节顺序 | `TienKung-Lab` `ultra_env.py` + `configs/leg_index_mapping.yaml` | `T_leg[0..11]` 唯一编号 |
+| 非帧内系数 `ct_scale` | `configs/ct_scale_profiles.yaml` 或录包时 **`tg22_config.yaml` 快照** | 不在 bag 帧内；**不**强制与 Deploy Git 版本一致 |
+
+### 2.1 Deploy_Tienkung（可选参考：历史插件行为；非消息 IDL 权威）
+
+以下摘自 Deploy 文档/源码，**仅**在理解「机载曾如何实现」时参考；**消息形状与取值以 bag + `Tienkung/ros2ws` 为准**。
 
 **Topic**
 
@@ -63,7 +75,7 @@
 | 项 | 说明 |
 |:---|:-----|
 | ~~`MotorStatus.temperature` 类型与单位~~ | **已确定**：见 **`TienKung_ROS`** `MotorStatus.msg`（`float32`，单通道）及 **`plan.md` §0**（**°C**） |
-| `MotorStatusMsg` 与实机固件是否分叉 | 以 bag / `ros2 interface show` 与 **TienKung_ROS** 定义交叉核对 |
+| `MotorStatusMsg` 与实机固件是否分叉 | 以 bag / `ros2 interface show` 与 **`Tienkung/ros2ws`** 中 `.msg` 交叉核对 |
 | 电压、原生 `ddq`、故障/CRC | 插件未读；其它 Topic 未在两仓库列出 |
 | BMS、主板温、风扇 | 插件未订阅 |
 | 环境温度计 | 非仓库接口 |
@@ -86,15 +98,24 @@ Deploy `bodyIdMap.h` 腿中间向量顺序：**l_hip_roll, l_hip_pitch, l_hip_ya
 
 ## 5. 关键路径
 
+### 5.1 权威来源（plan.md §0）
+
 | 路径 | 用途 |
 |:-----|:-----|
-| `Tienkung_thermal/docs/plan.md` | 完整计划与白名单 |
-| `Tienkung_thermal/configs/leg_index_mapping.yaml` | 与 **Ultra** 同序的 `motor_names` |
+| `Tienkung_thermal/data/bags/`（rosbag2） | **事实数据的最终依据**；与第三方仓库冲突时以 bag 为准 |
+| `Tienkung/ros2ws/install/bodyctrl_msgs/share/bodyctrl_msgs/msg/` | **消息定义与 CDR 解码的唯一权威**（`MotorStatus.msg` 等） |
+| `Tienkung_thermal/docs/plan.md` | 完整计划、白名单与权威接口收紧条款 |
+| `Tienkung_thermal/configs/leg_index_mapping.yaml` | 与 **Ultra** 同序的 `motor_names`、CAN→T_leg 映射 |
 | `TienKung-Lab/legged_lab/envs/ultra/ultra_env.py` | **Ultra 关节顺序权威（T_leg 唯一准则）** |
-| `Deploy_Tienkung/.../RLControlNewPlugin.cpp` | Topic 与 status/IMU 读取 |
-| `Deploy_Tienkung/.../bodyIdMap.h` | Deploy 腿索引与 CAN |
-| `Deploy_Tienkung/rl_control_new/config/tg22_config.yaml` | `dt`, `ct_scale` |
-| `TienKung_ROS/src/bodyctrl_msgs/msg/MotorStatus.msg` | **`float32 temperature`（°C）** 的权威 IDL |
+| `Tienkung_thermal/configs/ct_scale_profiles.yaml` | `ct_scale` 多版本管理（须为录包同期机载快照） |
+
+### 5.2 历史行为参考（Deploy，非强制来源）
+
+| 路径 | 用途 | 限定 |
+|:-----|:-----|:-----|
+| `Deploy_Tienkung/.../RLControlNewPlugin.cpp` | 了解插件曾如何读取 status/IMU | 不作为消息 IDL 权威 |
+| `Deploy_Tienkung/.../bodyIdMap.h` | 了解历史腿索引与 CAN 排列 | 以 `ros2ws` `MotorName.msg` 为准 |
+| `Deploy_Tienkung/.../tg22_config.yaml` | `dt`, `ct_scale` 历史参考 | 仅录包同期快照有效；Git 版本不保证与 bag 一致 |
 
 ---
 
@@ -149,8 +170,8 @@ Deploy `bodyIdMap.h` 腿中间向量顺序：**l_hip_roll, l_hip_pitch, l_hip_ya
 
 ### 6.5 最小可行模型（建议）
 
-- 序列长度：`L = 100`（约 5 s @ 20 Hz）
-- Horizon：先对齐 `plan.md` 的 **15 s** 目标，不必保留 G1 的 20 s 远视距
+- 序列长度：若以 **实机 rosbag 导出** 为准，见 **§9**：**`L = 2500`（5 s @ 500 Hz）**；下文 `L = 100`（5 s @ 20 Hz）仅对应旧版 `thermal_lstm_modeling.md` 叙述，**勿与 §9 混用**。
+- Horizon：先对齐 `plan.md` 的 **15 s** 目标（@ 500 Hz 为 **7500 步**），不必保留 G1 的 20 s 远视距
 - 架构：`InputProjection -> CausalLSTM -> Single PredictionHead`
 - 损失：单通道 `Huber` 或 `MAE`
 - 权重：训练可带 `w_0..w_11`，但 Gate 固定看等权 MAE
@@ -215,21 +236,23 @@ Ultra 基线：
 
 建议 Ultra 版中间格式以 **12 路腿关节** 为核心，不再复用 G1 的 `(N, 29)` 结构。
 
+**当前基线（v1 导出）**：**仅纯腿**，不落盘 IMU 组；若后续做 IMU 消融，再在同一 schema 下增加 `imu/*` 数据集。
+
 建议字段：
 
-- `timestamps`: `(N,)`
+- `timestamps`: `(N,)`（**严格 2 ms 网格**，即 **500 Hz**，与 `plan.md` §4 一致）
 - `joints/q`: `(N, 12)`
 - `joints/dq`: `(N, 12)`
 - `joints/current`: `(N, 12)` 或直接存 `tau_est`
-- `joints/tau_est`: `(N, 12)`
+- `joints/tau_est`: `(N, 12)`（`ct_scale` **按录制日期选用多版本**，见 **§10**）
 - `joints/temperature`: `(N, 12)`
-- `joints/ddq_num`: `(N, 12)`
-- `imu/euler`: `(N, 3)`
-- `imu/angular_velocity`: `(N, 3)`
-- `imu/linear_acceleration`: `(N, 3)`
-- `metadata/sample_rate`
+- `joints/voltage`: `(N, 12)`（`plan.md` §2.1.2.3）
+- `joints/ddq_num`: `(N, 12)`（由 `speed` 数值差分）
+- （可选扩展）`imu/euler`: `(N, 3)`、`imu/angular_velocity`: `(N, 3)`、`imu/linear_acceleration`: `(N, 3)` — **v1 不导出**
+- `metadata/sample_rate_hz`（固定 **500**）
 - `metadata/t_leg_order`
 - `metadata/deploy_to_t_leg_mapping`
+- `metadata/ct_scale_source`（路径或标签 + 版本/日期键）
 
 ### 7.6 Dataset 接口
 
@@ -293,43 +316,87 @@ Dataset 不再默认：
 
 ---
 
-## 9. 全量 rosbag → 单一数据集（仅 `/leg/status`）— 计划草案与待决事项
+## 9. 全量 rosbag → HDF5 数据集（仅 `/leg/status`，纯腿 v1）
 
-> **依据**：`plan.md` §1.2–1.3、§2.1（监督与特征白名单）、§4（20 Hz 建议）、§5（采集协议）；`thermal_lstm_modeling.md` §1.2（`L=100`、20 Hz、horizon 等）；`configs/leg_index_mapping.yaml`（Ultra `T_leg[0..11]`）。  
-> **范围**：原始 Topic **仅** `/leg/status`（`MotorStatusMsg`）；**不**包含 `/leg/motor_status`（`MotorStatusMsg1`），与 `plan.md` 监督来源一致。
+> **依据**：`plan.md` §1.2–1.3、§2.1、§4（**500 Hz** 工程网格）、§5；`configs/leg_index_mapping.yaml`（Ultra `T_leg[0..11]`）。  
+> **范围**：原始 Topic **仅** `/leg/status`（`MotorStatusMsg`）；**不**导出 `/imu/status`**（v1 纯腿基线）；**不**将 `/leg/motor_status`（`MotorStatusMsg1`）纳入基线监督，与 `plan.md` 一致。
 
-### 9.1 目标（工程上）
+### 9.1 已确认导出策略（2026-04-13）
 
-- 遍历 `data/bags/` 下**全部**有效 **rosbag2** 目录（每个目录含 `metadata.yaml` + 至少一个 `.db3`）。
-- 从每条 bag 中**仅**读取 `/leg/status`，解码为 `MotorStatusMsg`。
-- 将 `status[]` 中每条 `one` 按 **Deploy `name`（CAN）→ Ultra `T_leg[i]`** 固定映射重排为 **12 列**向量（缺关节或重复名的处理策略见 **§9.3**）。
-- 按统一时间轴落盘为**一个**（或按 session 多文件 + 索引表）训练用中间格式，字段至少覆盖 `plan.md` §2.1.2 所需：`q`, `dq`, `current`, `temperature`（°C），并派生 `tau_est`（需 **`ct_scale` 与 Deploy 下标 `j` 对齐后再映射到 Ultra**）、`tau_sq`、`|dq|`、数值 `|ddq|` 等；时间戳单调、采样率对齐 **`thermal_lstm_modeling.md` 建议的 20 Hz**（或你另定的网格）。
-- 记录元数据：`bag_id` / `session_id`、`source_path`、`t_leg_order`、映射表版本、`ct_scale` 来源与 `tg22_config.yaml` 路径或内嵌快照。
+| 项 | 决定 |
+|:---|:-----|
+| **落盘格式** | **HDF5**（可按 session 多文件 + 全局 manifest，见 §9.5） |
+| **特征范围** | **纯腿基线**：仅 `/leg/status` 派生字段；**不含** IMU |
+| **时间网格** | **按时间戳重采样到严格 2 ms**（**500 Hz**），与 `plan.md` §4 一致 |
+| **`ct_scale`** | **按录制日期多版本**选用对应 `tg22_config.yaml`（或等价快照）；**必须在 HDF5/metadata 中记录**所用版本与路径或哈希 |
+| **异常帧** | 任一腿部电机 **`error ≠ 0`**：**整帧丢弃**（该时间样本不进入序列） |
+| **`status` 长度 ≠ 12 等** | 见 **§9.6（R3）**：建议 **整帧丢弃**；连续大量异常则 **丢弃 session** 并记录原因 |
 
-### 9.2 推荐实现顺序（与 §8 Phase A 一致）
+### 9.2 窗口长度与预测 horizon（与验收 15 s 对齐）
 
-1. **Bag 清单**：枚举所有 `rosbag2_*`，跳过损坏目录；多 `.db3` 的 bag 需决定合并策略（见 §9.3）。  
-2. **解码**：`rosbags` + `bodyctrl_msgs`（及 bag 中若引用到的其他类型则按需加包）；或复用/扩展 `scripts/bags/extract_bag_topic_samples.py` 为流式全量读取。  
-3. **映射**：实现 `name` → Ultra 索引 `i∈[0,11]` 的单测（对照 `bodyIdMap` / 实机约定）。  
-4. **重采样**：统一到目标 Hz（默认 20 Hz），记录原始中位间隔供质检。  
-5. **落盘格式**：Parquet / HDF5 / NPZ（与 `§7.5` schema 对齐），并附 **session 级 manifest** 供 Train/Val/Test 划分（**整段 session 不拆**，见 `recording_operations.md` / `thermal_lstm_modeling.md` §6.4）。
+| 量 | 约定 |
+|:---|:-----|
+| **训练输入窗口** | **`L = 2500`**（**5 s** @ **500 Hz**），与 `plan.md` §4、`§2.1.5` 一致 |
+| **验收目标** | 主温度预测未来 **15 s**（`plan.md` §0） |
+| **15 s 对应步数** | @ 500 Hz：**7500 步**（\(15 \times 500\)） |
+| **训练监督 horizon** | 实现上可配置 `H` 步；**与验收一致**时取 **`H = 7500`**（15 s）。若显存/稳定性需分阶段，可先训较短 `H` 再延长，但 **Gate / 报数**应以 **15 s @ 500 Hz** 为准 |
 
-### 9.3 待你决定的问题（请先回复，再写具体脚本参数）
+### 9.3 推荐实现顺序
 
-| # | 问题 | 为何重要 |
-|:--|:-----|:---------|
-| **Q1** | **输出格式**：单一 **HDF5**、**Parquet**（按 session 分区）、还是 **NPZ** + CSV manifest？ | 影响后续 `Dataset` 与磁盘占用；Parquet 便于增量 append。 |
-| **Q2** | **是否纳入全部 bag**：`data/bags/` 下**所有** `rosbag2_*`，还是只纳入白名单（例如按日期、工况笔记）？ | 与数据质量、错误 session 剔除策略相关。 |
-| **Q3** | **多 db3 的 bag**（一个 `metadata.yaml` 对应多个 shard）：**按时间顺序拼接**还是**只取第一个**或**整目录拒收**？ | 脚本必须明确，否则丢段或乱序。 |
-| **Q4** | **`ct_scale` 来源**：固定使用某一份 **`tg22_config.yaml`** 路径，还是允许「按录制日期选不同配置」？ | 直接影响 `tau_est`；与 `plan.md` §2.1.2 一致。 |
-| **Q5** | **目标采样率**：默认 **`20 Hz`**（`thermal_lstm_modeling.md`），还是保留原始近似 **400 Hz** 再离线降采样？ | 影响特征与标签时间对齐方式。 |
-| **Q6** | **`/leg/status` 中 `status` 长度 ≠ 12 或缺电机**：**丢弃整帧**、**仅填 NaN**、还是 **丢弃该 bag**？ | 数据清洗规则必须统一。 |
-| **Q7** | **是否在本阶段同时导出 `/imu/status`**（若 bag 中有）以便后续 IMU 消融？当前你说「只 `/leg/status`」—若 **否**，则数据集不含 IMU；若 **是**，需额外 `--msg-package` 与对齐策略。 | 与 `plan.md` §2.1.3 可选特征一致。 |
-| **Q8** | **输出目录与体积**：是否接受在仓库外（如数据盘）生成 **数十 GB** 中间文件？**`data/bags` 是否保持仅本地、不提交 Git**（已与 `.gitignore` 一致）？ | 流程与权限。 |
+1. **Bag 清单**：枚举 `data/bags/rosbag2_*`（`metadata.yaml` + `.db3`）；多 shard 按 **时间顺序拼接**（若尚未定稿，见 §9.6 开放项）。  
+2. **解码**：`rosbags` + `bodyctrl_msgs`；流式读取 `/leg/status` 全量消息。  
+3. **映射 + 清洗**：CAN `name` → Ultra `T_leg[0..11]`；**error≠0** 整帧丢；重排到 **500 Hz / 2 ms** 网格。  
+4. **派生**：`tau_est`、`tau_sq`、`|dq|`、`ddq_num`、`voltage` 等仅来自白名单字段（`plan.md` §2.1.2）。  
+5. **落盘**：HDF5 与 `§7.5` 对齐；附 **session manifest**（§9.5）。
 
-### 9.4 本节后继
+### 9.4 Train / Val / Test 划分 — 接口保留与当前用法
 
-- 你确认 **§9.3** 各项后，将在此节补充 **最终参数表、命令行示例、manifest 字段定义**，并实现/对接 `tienkung_thermal/datasets/` 读取逻辑。
+**设计意图**：划分逻辑应支持（未来）**比例**（如 70/15/15）、**指定必须进 test 的 session**（如长跑、冷却段），且 **始终以 session 为原子**，避免同一录制泄漏到 train 与 test。
+
+**当前阶段（v1）**：**仅按 session 划分**（例如脚本参数：train session 列表 / val / test，或按比例随机分 session **且固定随机种子**）。**比例、强制 test 工况** 先保留为 **manifest / CLI 占位字段**，待数据与工况标注完善后再启用。
+
+建议在 manifest 中预留列（示例）：
+
+- `session_id`、`hdf5_path`、`duration_s`、`n_frames_500hz`、`ct_scale_key`
+- `split`：`train` \| `val` \| `test`（由划分脚本写入）
+- （可选，待填）`scenario_tags`：如 `long_run`、`cooldown`，用于未来 **强制进 test**
+
+### 9.5 HDF5 与 manifest 要点
+
+- 每个 session 一个 HDF5 或按约定分块；**全局 `manifest.csv`（或 JSON）** 索引全部 session。  
+- **元数据必含**：`sample_rate_hz=500`、`t_leg_order`、`ct_scale` 版本标识、`source_rosbag` 路径、`export_timestamp`。
+
+### 9.6 仍待实现时拍板的细节（非阻塞当前决策）
+
+| # | 项 | 说明 |
+|:--|:---|:-----|
+| **R1** | 多 `.db3` shard | 默认建议 **按 bag 内时间顺序合并**；若某 bag 异常则整包剔除并记入 manifest |
+| **R2** | 输出根目录 | 仓库内 `data/processed/` 或数据盘路径；大文件不入 Git |
+| **R3** | `status` 长度异常 | 建议 **整帧丢弃**；连续大量异常则 **丢弃 session** 并记录原因 |
+
+---
+
+## 10. 工作记录（按日期）
+
+### 2026-04-13 — rosbag → 数据集导出决策
+
+- 输出：**HDF5**；**纯腿**、**不重采样 IMU**；时间轴 **严格 2 ms（500 Hz）**。  
+- **`ct_scale`**：**按录制日期多版本**，落盘注明来源。  
+- **清洗**：**error≠0 → 整帧丢弃**。  
+- **划分**：manifest **保留**比例与强制 test 的接口；**当前仅 session 级划分**。  
+- **窗口**：**L=2500**（5 s @ 500 Hz）；验收对齐 **15 s → 7500 步** @ 500 Hz；训练 `H` 可配置，**报数与 Gate 以 15 s 为准**。  
+- 详见本章 **§9**。
+
+### 2026-04-13 — 全量导出实现与跑批（`data/bags` → `data/processed/leg_status_500hz`）
+
+- **入口**：`scripts/bags/export_leg_status_dataset.py`；库内逻辑：`tienkung_thermal/bags/pipeline.py`（CAN→`T_leg`、`ct_scale` 置换、500 Hz 网格、`h5py` 落盘）。  
+- **依赖**：`pip install -e ".[rosbag]"`；`--msg-package` 指向 **`bodyctrl_msgs` 包根**（含 `package.xml`），本机示例：`.../Tienkung/ros2ws/install/bodyctrl_msgs/share/bodyctrl_msgs`。  
+- **命令示例**（处理整个 `data/bags`、输出到默认目录、重写 manifest 列）：  
+  `python scripts/bags/export_leg_status_dataset.py data/bags --out-dir data/processed/leg_status_500hz --overwrite-manifest --msg-package <bodyctrl_msgs根>`  
+- **仅重建 manifest**（已有 `.h5`、不重新解码 bag）：加 `--skip-existing`，会按各 HDF5 内 `metadata` 属性与 `timestamps` 长度写表（勿与「删除全部 h5 后重跑」混淆）。  
+- **manifest 列**：含 `ct_scale_profile`、`n_grid_frames_500hz` 等；`split` 留空供后续按 session 填写。  
+- **跳过原因**：`metadata.yaml` **缺失或为空**、无 `rosbag2_bagfile_information`、无 `.db3` 时 **不调用 rosbags**（否则会 `NoneType`）；需补全元数据或重新录制。已成功导出的 session 其 HDF5 内 `joints/*` 形状为 `(N, 12)`，`timestamps` 为秒、步长 0.002 s。  
+- **`ct_scale` 多版本**：编辑 `configs/ct_scale_profiles.yaml` 的 `profiles` + `profile_rules`（按 `rosbag2_*` 目录名 **prefix** 匹配）；当前占位为 **default 全 1.0**，实机系数需从 **`tg22_config.yaml` 腿段前 12 项** 填入对应 profile。
 
 ---
 

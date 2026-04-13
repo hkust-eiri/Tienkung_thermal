@@ -1,0 +1,54 @@
+# 录包同期机载 ct_scale（按腿中间向量 CAN 顺序 j=0..11 排列）
+#
+# ========== 权威来源（plan.md §0）==========
+# ct_scale 不随每帧写入 bag，须由「录包同时期机载 tg22_config.yaml 快照」提供；
+# 与 Deploy_Tienkung 仓库 Git 版本是否与 bag 同期**无关**。
+# Deploy 仅作历史行为参考，不作为系数的强制来源。
+#
+# ========== 使用方式 ==========
+# 1. ct_scale_deploy_leg 的 12 个元素顺序与录包同期机载 tg22_config.yaml 腿段一致：
+#    j=0: l_hip_roll, j=1: l_hip_pitch, j=2: l_hip_yaw, j=3: l_knee,
+#    j=4: l_ankle_pitch, j=5: l_ankle_roll, j=6: r_hip_roll, j=7: r_hip_pitch,
+#    j=8: r_hip_yaw, j=9: r_knee, j=10: r_ankle_pitch, j=11: r_ankle_roll
+#
+# 2. 导出代码（pipeline.py）读取本文件后，使用 leg_index_mapping.yaml 中的
+#    deploy_j_to_t_leg_i 置换表将 ct_scale_deploy_leg[j] 重排到 Ultra T_leg[i] 顺序：
+#      ct_scale_ultra[i] = ct_scale_deploy_leg[ deploy_j_to_t_leg_i 的逆映射[i] ]
+#    注意：髋部 pitch/yaw 在 Deploy(R-P-Y) 与 Ultra(R-Y-P) 之间交叉，其余不变。
+#
+# 3. 重排后的 ct_scale_ultra 与 HDF5 中 tau_est = current * ct_scale_ultra[i] 对应。
+#    HDF5 根级属性 ct_scale_per_t_leg_json 记录实际使用的 Ultra 顺序 ct_scale 快照。
+#
+# ========== 填值说明 ==========
+# default 为占位（全 1.0）；请用**与 bag 同期**的机载 tg22_config.yaml 中
+# ct_scale 的前 12 个腿系数覆盖，或新增 profile 并在 profile_rules 中按 bag 目录名前缀选用。
+# 若 ct_scale 仍为全 1.0，则 tau_est / tau_sq 仅保证公式与顺序正确，数值无物理意义。
+# 详见 plan.md §0（非帧内配置）、§1.3.2、dataset_leg_status_h5.md §7。
+# ==================================
+
+profiles:
+  default:
+    id: default
+    description: "占位 uniform 1.0 — 请替换为真实 ct_scale"
+    ct_scale_deploy_leg:
+      - 1.0   # j=0  l_hip_roll
+      - 1.0   # j=1  l_hip_pitch
+      - 1.0   # j=2  l_hip_yaw
+      - 1.0   # j=3  l_knee
+      - 1.0   # j=4  l_ankle_pitch
+      - 1.0   # j=5  l_ankle_roll
+      - 1.0   # j=6  r_hip_roll
+      - 1.0   # j=7  r_hip_pitch
+      - 1.0   # j=8  r_hip_yaw
+      - 1.0   # j=9  r_knee
+      - 1.0   # j=10 r_ankle_pitch
+      - 1.0   # j=11 r_ankle_roll
+
+# 按 rosbag 目录名前缀匹配，先写长前缀的规则；末行 prefix: "" 为兜底
+profile_rules:
+  - prefix: "rosbag2_2026_04"
+    profile: default
+  - prefix: "rosbag2_2026_03"
+    profile: default
+  - prefix: ""
+    profile: default

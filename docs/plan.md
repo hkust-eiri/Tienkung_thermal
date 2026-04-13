@@ -9,9 +9,14 @@
 * **数据使用原则（硬性）**: 建模、训练与评估所用的**原始观测**来自 **`/leg/status`** 话题（消息类型 `bodyctrl_msgs/msg/MotorStatusMsg`）及可选的 **`/imu/status`**（`bodyctrl_msgs/msg/Imu`）。字段范围以 ros2ws 中 `.msg` 定义为界。  
   * **允许**：对上述已定义标量/向量做**确定性后处理**（例如对 `speed` 做时间差分得到数值角加速度、对温度做 EMA），不新增数据源。  
   * **禁止**：把未在 ros2ws `.msg` 定义中出现的量直接写入「基线特征」；此类一律列入 **§1.5 待获取备选数据**。
+* **权威接口收紧（离线数据与解码）**：  
+  * **事实数据**：**`Tienkung_thermal/data/bags/`** 中的 rosbag2 为实机已落盘内容的**最终依据**；若与第三方仓库（含 **`Deploy_Tienkung`** 旧版源码或 README）描述冲突，**以 bag 为准**。  
+  * **消息定义与解码**：**`Tienkung/ros2ws`**（如 `install/bodyctrl_msgs/share/bodyctrl_msgs/msg/*.msg` 及录制所需其它包）为字段名、类型与 CDR 反序列化语义的**唯一权威**；导出/训练管线应将 `--msg-package` 或类型搜索路径指向该工作空间。  
+  * **`Deploy_Tienkung` 的定位**：**不**作为消息 IDL 或 bag 内字节语义的强制来源；仅在需要时作**历史行为说明**（如控制器曾如何使用 `name`/`ct_scale`）。  
+  * **非帧内配置**（如 **`ct_scale`**）：不随每帧写入 bag，须由**录包同时期机载 `tg22_config.yaml` 快照**或 **`configs/ct_scale_profiles.yaml`** 提供；与 Deploy 仓库 Git 版本是否与 bag 同期**无关**。  
 * **机器人型号**: **TienKung Ultra**（与 Lab 中 Ultra 资产及 `ultra_env` 一致）。
 * **建模范围（硬性）**: **仅** Lab 定义的 **12** 个腿部关节（与 `leg_index_mapping.yaml` 中 `n_leg_motors: 12` 及 `motor_names` 一致）；不含上肢、腰、头等（与本专项无关）。
-* **核心目标**: 在实机侧使用 Deploy 已定义的 ROS2 状态流，对 **12 路腿部** 构建因果 LSTM 热预测；工况与任务命名可与 Lab 的 `ultra_walk` / `ultra_run` 及数据集目录对齐。
+* **核心目标**: 基于 **`Tienkung_thermal/data/bags`** 中的实机 **`/leg/status`**（及可选 **`/imu/status`**）与 **`Tienkung/ros2ws`** 中的消息定义，对 **12 路腿部** 构建因果 LSTM 热预测；工况与任务命名可与 Lab 的 `ultra_walk` / `ultra_run` 及数据集目录对齐。
 * **验收标准（初稿）**: 主温度预测未来 **15 s**，**12 关节等权算术平均 MAE ≤ 1.5°C**。  
 * **关节权重接口**: 配置权重 `w_0..w_11`（顺序同 `motor_names`），默认全 **1**；训练可用加权损失 \(\mathcal{L} = \sum_i w_i \mathcal{L}_i / \sum_i w_i\)；**验收与 Gate 仅以等权平均 MAE 为准**；可选可学习 \(w_i\)（归一化后），见 §6.1。  
 * **运行约束**: 单次前向推理 **≤ 5 ms**（FP16，机载或 PC）。
@@ -33,7 +38,7 @@
 | 层级 | 内容 |
 |:-----|:-----|
 | 仿真与策略 | **TienKung-Lab**：Isaac Sim 4.5 + Isaac Lab 2.1（见 `TienKung-Lab/README.md`），任务 `ultra_walk` / `ultra_run`，Sim2Sim `sim2sim_ultra.py` |
-| 实机采集与控制 | **Deploy_Tienkung**：ROS2 Humble，`rl_control_new` 插件（见 `Deploy_Tienkung/README.md`） |
+| 实机采集与控制（运行时栈） | **Deploy_Tienkung**：ROS2 Humble，`rl_control_new` 插件。**不**作为消息 IDL 或 bag 字节语义的权威来源（§0） |
 | **ROS2 消息定义（权威）** | **`Tienkung/ros2ws/install/bodyctrl_msgs/`**：全部 `.msg` / `.srv` 的唯一权威来源（16 个 ament 包；腿部核心为 `MotorStatus.msg` + `MotorStatusMsg.msg` + `MotorName.msg`） |
 
 ### 1.2 腿部关节顺序（**以 Ultra 为准，唯一准则**）
@@ -49,11 +54,11 @@
 | 0–5 | `hip_roll_l_joint` … `ankle_roll_l_joint` |
 | 6–11 | `hip_roll_r_joint` … `ankle_roll_r_joint` |
 
-**Deploy 侧**（`Deploy_Tienkung/.../bodyIdMap.h`）：腿中间向量 **0–11** 为 `l_hip_roll`, `l_hip_pitch`, `l_hip_yaw`, …（髋 **R–P–Y**）。**不得**将 Deploy 下标 `j` 与 Ultra 槽位 `i` 按位置一一等同；**必须**按**关节语义名**（及 CAN id→名）将 `/leg/status` 与 `ct_scale[j]` 对齐到上表 **`T_leg[i]`** 后再进入训练或特征管线。
+**历史 CAN 排列**（参考 `bodyIdMap.h`）：bag 中 `/leg/status` 的 CAN 排列沿用历史腿中间向量 **0–11**：`l_hip_roll`, `l_hip_pitch`, `l_hip_yaw`, …（髋 **R–P–Y**）。**不得**将 CAN 顺序下标 `j` 与 Ultra 槽位 `i` 按位置一一等同；**必须**按**关节语义名**（及 `ros2ws` `MotorName.msg` 中 CAN id→名）将 `/leg/status` 与 `ct_scale[j]` 对齐到上表 **`T_leg[i]`** 后再进入训练或特征管线。
 
 #### 1.2.1 CAN ID → `T_leg[i]` 完整映射表（已确认）
 
-**来源**：`bodyctrl_msgs/msg/MotorName.msg`（左腿 51–56，右腿 61–66）+ Deploy 侧髋部 R–P–Y 排列。
+**来源**：`ros2ws` 中 `bodyctrl_msgs/msg/MotorName.msg`（左腿 51–56，右腿 61–66）+ 历史 CAN/Deploy 髋部 R–P–Y 排列对照。
 
 | CAN ID | `MotorName` 常量 | Deploy 语义名 | `T_leg[i]` | Ultra 关节名 |
 |:------:|:-----------------|:-------------|:----------:|:------------|
@@ -70,7 +75,7 @@
 | 65 | `MOTOR_LEG_RIGHT_5` | `r_ankle_pitch` | **10** | `ankle_pitch_r_joint` |
 | 66 | `MOTOR_LEG_RIGHT_6` | `r_ankle_roll` | **11** | `ankle_roll_r_joint` |
 
-**注意**：CAN 52/53（左髋 pitch/yaw）与 CAN 62/63（右髋 pitch/yaw）在 Deploy 序号与 Ultra `T_leg` 下标之间**交叉**（Deploy 髋 R–P–Y vs Ultra 髋 R–Y–P），其余关节序号不变。采集代码**必须**按此表重排，不可逐位置拷贝。
+**注意**：CAN 52/53（左髋 pitch/yaw）与 CAN 62/63（右髋 pitch/yaw）在 CAN 序号与 Ultra `T_leg` 下标之间**交叉**（CAN 髋 R–P–Y vs Ultra 髋 R–Y–P），其余关节序号不变。导出代码**必须**按此表重排，不可逐位置拷贝。
 
 ### 1.3 `/leg/status` — 准许作为原始数据的接口（ros2ws 消息定义为准）
 
@@ -106,7 +111,7 @@ MotorStatus[] status
 
 **原始频率**：实测 bag 中 `/leg/status` 约 **1 kHz**（时间戳间隔 ~1 ms）。本专项降采样至 **500 Hz** 后使用（见 §4）。
 
-**配置参考**：`Deploy_Tienkung/rl_control_new/config/tg22_config.yaml` 中的 **`ct_scale`** 可用于将 `current` 转换为力矩估计 \(\tau_{est}\)（与热特征相关的为 **`dt`、`ct_scale`**）。
+**`ct_scale` 来源**：须由**录包同时期机载 `tg22_config.yaml` 快照**或 **`configs/ct_scale_profiles.yaml`** 提供（见 §0 非帧内配置条款）；可将 `current` 转换为力矩估计 \(\tau_{est}\)。与 `Deploy_Tienkung` 仓库 Git 版本是否与 bag 同期**无关**。
 
 #### 1.3.3 `Imu` 结构（ros2ws 权威定义）
 
@@ -159,7 +164,7 @@ MotorStatus[] status
 | \(q\) | `pos`（映射到 `T_leg` 顺序后，§1.2.1） |
 | \(dq\) | `speed` |
 | \(I\) | `current` |
-| \(\tau_{est}\) | `current × ct_scale[j]`（`ct_scale` 来自 `tg22_config.yaml`） |
+| \(\tau_{est}\) | `current × ct_scale[j]`（`ct_scale` 来自 `ct_scale_profiles.yaml` 或录包同期机载快照，见 §0） |
 | \(T\) | `temperature`（**监督标签**） |
 | \(V\) | `voltage`（电机端电压，输入特征） |
 | `error` | `error`（数据质量过滤，非输入特征） |
@@ -185,7 +190,7 @@ MotorStatus[] status
 | \(q\) | `pos`（经 §1.2.1 映射到 \(i\)） | 位置 (rad) |
 | \(dq\) | `speed`（映射到 \(i\)） | 角速度 (rad/s) |
 | \(I\) | `current`（映射到 \(i\)） | 电机电流 (A)；原始值，未乘 `ct_scale` |
-| \(\tau_{est}\) | `current × ct_scale[j]` | \(j\) 为 Deploy 中间向量下标，经 §1.2.1 映射表与 \(i\) 对应；`ct_scale` 来自 `tg22_config.yaml` |
+| \(\tau_{est}\) | `current × ct_scale[j]` | \(j\) 为 CAN 顺序下标（沿用历史 Deploy 腿中间向量排列），经 §1.2.1 映射表与 \(i\) 对应；`ct_scale` 来自 `ct_scale_profiles.yaml` 或录包同期快照（§0） |
 | \(T\) | `temperature`（标量 **°C**，映射到 \(i\)） | 当前温；可做 EMA 等平滑 |
 | \(V\) | `voltage`（映射到 \(i\)） | 电机端电压 (V)；电压降反映负载，与热产生关联；释义见 **§2.1.2.3** |
 | \(\tau_{sq}\) | \(\tau_{est}^2\) | 焦耳热代理（由 \(\tau_{est}\) 平方导出）；释义见 **§2.1.2.1** |
@@ -194,8 +199,8 @@ MotorStatus[] status
 
 #### 2.1.2.1 估计力矩 \(\tau_{est}\) 与焦耳热代理 \(\tau_{sq}\)
 
-* **\(\tau_{est}\) 的来源（Deploy 插件一致）**  
-  对每个电机状态：\(\tau_{est} = \texttt{one.current} \times \texttt{ct\_scale}[j]\)。其中 `ct_scale` 来自 `tg22_config.yaml`，下标 \(j\) 为 Deploy 中间向量索引，与 `T_leg[i]` 之间用固定映射表对齐。**不是**力矩传感器直读值，而是**电流 × 标定系数**得到的估计。
+* **\(\tau_{est}\) 的来源**  
+  对每个电机状态：\(\tau_{est} = \texttt{one.current} \times \texttt{ct\_scale}[j]\)。其中 `ct_scale` 来自 `configs/ct_scale_profiles.yaml` 或录包同期机载 `tg22_config.yaml` 快照（见 §0），下标 \(j\) 为 CAN 顺序索引（沿用历史 Deploy 腿中间向量排列），与 `T_leg[i]` 之间用 §1.2.1 固定映射表对齐。**不是**力矩传感器直读值，而是**电流 × 标定系数**得到的估计。
 
 * **\(\tau_{sq} = \tau_{est}^2\) 如何得到**  
   在同一时间步、同一关节上，对 \(\tau_{est}\) 做标量平方即可：\(\tau_{sq} = (\tau_{est})^2\)。实现上等价于 `tau_est * tau_est`，**不新增**任何 Topic 或字段，仅属 §0 允许的确定性后处理。
@@ -250,7 +255,7 @@ MotorStatus[] status
 
 * 原生 `ddq` 话题、BMS、主板温、风扇、外置温湿度计（未入库前）。  
 * `MotorStatus1` 双温度通道、`PowerStatus` 板级数据：虽有对应 `.msg` 定义，**topic 名未确认**前不纳入基线。  
-* **TienKung-Lab 仿真**：虽有 `joint_pos` / `joint_vel` 等，**无**与实机一致的标量 `temperature`，**不能**作为本热 LSTM 的**温度监督**；仅可用于工况设计、轨迹参考或与 Deploy 日志**时间对齐**的辅助记录（若业务需要），**不替代** §2.1.1 的标签来源。
+* **TienKung-Lab 仿真**：虽有 `joint_pos` / `joint_vel` 等，**无**与实机一致的标量 `temperature`，**不能**作为本热 LSTM 的**温度监督**；仅可用于工况设计、轨迹参考或与 bag 日志**时间对齐**的辅助记录（若业务需要），**不替代** §2.1.1 的标签来源。
 
 #### 2.1.5 张量组织（与 §4、§6 衔接）
 
@@ -274,14 +279,14 @@ MotorStatus[] status
 * **\(ddq\)**：无原生字段时，**仅允许**由已记录的 `speed` 序列数值差分得到；若将来有驱动器原生 `ddq` Topic，先移入 §1.3 再使用。  
 * **邻域耦合**: 仅 **\(T_leg\)** 相邻索引（**Ultra** 顺序下），见 §2.1.2。  
 * **全局特征**: 在基线中**仅**可使用 §1.3.3 的 IMU 9 维（§2.1.3）；PowerStatus 等属 §1.5。  
-* **张量形状**: `[B, L, D]`，`L = 2500`（约 5 s @ 500 Hz）；输出为多步标量温度，见 §2.1.5。与 `thermal_lstm_modeling.md` 对齐前须同步修订该文档。  
+* **张量形状**: `[B, L, D]`，`L = 2500`（约 5 s @ 500 Hz）；输出为多步标量温度，见 §2.1.5。`thermal_lstm_modeling.md` 已与本文档对齐。  
 * **error 过滤**：`error ≠ 0` 的帧排除，见 §2.1.1。
 
 ---
 
 ## 5. 数据集采集协议
 
-* **录制**：至少 `/leg/status`（及若使用 IMU 上下文则 `/imu/status`）；与插件一致的字段。  
+* **录制**：至少 `/leg/status`（及若使用 IMU 上下文则 `/imu/status`）；字段范围以 `ros2ws` `.msg` 定义为界。  
 * **ROS 2 `ros2 bag record` 示例**（实机已 `source` 工作空间、topic 在播；输出目录按需修改）：  
   * 仅腿部状态（含每关节 `temperature`）：
 
@@ -295,7 +300,7 @@ ros2 bag record -o ~/bags/thermal_leg_$(date +%Y%m%d_%H%M%S) /leg/status
 ros2 bag record -o ~/bags/thermal_leg_imu_$(date +%Y%m%d_%H%M%S) /leg/status /imu/status
 ```
 
-* **映射**：Deploy `index` / `bodyIdMap` 名称 → **Ultra** 顺序的 `T_leg[0..11]`（固定语义映射表，写入采集代码注释；**Ultra 为准**）。  
+* **映射**：CAN ID（`ros2ws` `MotorName.msg`）→ **Ultra** 顺序的 `T_leg[0..11]`（固定语义映射表见 §1.2.1 与 `leg_index_mapping.yaml`；**Ultra 为准**）。  
 * **工况矩阵、时长、冷却段**：同前版 §5.2–5.3；**室温**属 §1.5 外设记录，可保留为实验笔记，**不**声称来自两仓库接口。  
 * **实操流程与 session 设计**：分步检查清单、`ros2 bag record` 用法、建议工况类型与 Train/Val/Test 衔接见 **`docs/recording_operations.md`**。
 

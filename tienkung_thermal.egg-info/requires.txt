@@ -6,6 +6,7 @@ ruff>=0.1.0
 
 [rosbag]
 rosbags>=0.9
+h5py>=3.8
 
 [train]
 torch>=2.0

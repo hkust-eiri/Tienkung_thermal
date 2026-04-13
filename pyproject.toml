@@ -21,6 +21,7 @@ train = [
 ]
 rosbag = [
   "rosbags>=0.9",
+  "h5py>=3.8",
 ]
 dev = [
   "ruff>=0.1.0",

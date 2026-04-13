@@ -6,9 +6,16 @@
 #   的 find_joints(name_keys) 顺序一致（本文件 motor_names 与之对齐）。
 # - 每侧顺序：hip_roll → hip_yaw → hip_pitch → knee_pitch → ankle_pitch → ankle_roll
 #   （髋部为 R–Y–P；与 Deploy bodyIdMap 腿向量髋部 R–P–Y **不一致**）。
-# - Deploy_Tienkung 仅提供原始话题与中间向量下标 j；**禁止**用 Deploy 腿向量下标 j
-#   直接当作 T_leg[i]**。必须先按关节语义名（或 CAN id→名）映射到 Ultra 槽位 i，再
-#   写入/读取 T_leg[i]；ct_scale[j] 等亦须与「Deploy 中间向量 j」对齐后再置换到 Ultra 第 i 路。
+# - Deploy_Tienkung 仅作历史行为参考（如腿中间向量下标 j 的排列），不作为消息 IDL
+#   或 bag 字节语义的强制来源（plan.md §0）。**禁止**用 Deploy 腿向量下标 j
+#   直接当作 T_leg[i]。必须先按关节语义名或 CAN id→名（ros2ws MotorName.msg）
+#   映射到 Ultra 槽位 i，再写入/读取 T_leg[i]；ct_scale[j]（录包同期快照）
+#   亦须与 CAN 下标空间对齐后再置换到 Ultra 第 i 路。
+# ========== MotorStatus 字段（ros2ws 权威定义）==========
+# 每条 MotorStatus 含：name(uint16/CAN ID), pos(rad), speed(rad/s),
+# current(A), temperature(°C), error(uint32), voltage(V)
+# 其中 temperature 为监督标签；error 用于数据质量过滤（≠0 整帧丢弃）；
+# voltage 为 LSTM 输入特征。详见 plan.md §1.3.2。
 # ==========================================
 
 n_leg_motors: 12
@@ -16,30 +23,42 @@ n_leg_motors: 12
 # T_leg[i] 的物理含义：电机温度，单位 °C（与 bodyctrl_msgs/MotorStatus.temperature 一致，见 TienKung_ROS MotorStatus.msg）。
 # 顺序即 T_leg[0]..T_leg[11]；关节名与 Ultra USD/MJCF 中 joint name 一致（*_joint）
 motor_names:
-  - hip_roll_l_joint
-  - hip_yaw_l_joint
-  - hip_pitch_l_joint
-  - knee_pitch_l_joint
-  - ankle_pitch_l_joint
-  - ankle_roll_l_joint
-  - hip_roll_r_joint
-  - hip_yaw_r_joint
-  - hip_pitch_r_joint
-  - knee_pitch_r_joint
-  - ankle_pitch_r_joint
-  - ankle_roll_r_joint
+  - hip_roll_l_joint      # T_leg[0]
+  - hip_yaw_l_joint       # T_leg[1]
+  - hip_pitch_l_joint     # T_leg[2]
+  - knee_pitch_l_joint    # T_leg[3]
+  - ankle_pitch_l_joint   # T_leg[4]
+  - ankle_roll_l_joint    # T_leg[5]
+  - hip_roll_r_joint      # T_leg[6]
+  - hip_yaw_r_joint       # T_leg[7]
+  - hip_pitch_r_joint     # T_leg[8]
+  - knee_pitch_r_joint    # T_leg[9]
+  - ankle_pitch_r_joint   # T_leg[10]
+  - ankle_roll_r_joint    # T_leg[11]
 
-# Deploy（TG22）腿段名称，仅作交叉参考；与上表顺序不同（髋为 roll–pitch–yaw）
-# deploy_motor_names_reference:
-#   - l_hip_roll
-#   - l_hip_pitch
-#   - l_hip_yaw
-#   - l_knee
-#   - l_ankle_pitch
-#   - l_ankle_roll
-#   - r_hip_roll
-#   - r_hip_pitch
-#   - r_hip_yaw
-#   - r_knee
-#   - r_ankle_pitch
-#   - r_ankle_roll
+# ========== CAN ID → T_leg[i] 完整映射表（plan.md §1.2.1 已确认）==========
+# 来源：ros2ws 中 bodyctrl_msgs/msg/MotorName.msg（左腿 51–56，右腿 61–66）+ 历史 Deploy 髋部 R–P–Y 排列对照。
+# 注意：CAN 52/53（左髋 pitch/yaw）与 CAN 62/63（右髋 pitch/yaw）在 CAN 序号与 Ultra 下标
+# 之间交叉（CAN 髋 R–P–Y vs Ultra 髋 R–Y–P），其余关节序号不变。
+can_id_to_t_leg:
+  51: 0    # MOTOR_LEG_LEFT_1  → l_hip_roll    → hip_roll_l_joint
+  52: 2    # MOTOR_LEG_LEFT_2  → l_hip_pitch   → hip_pitch_l_joint  (注意：非 T_leg[1])
+  53: 1    # MOTOR_LEG_LEFT_3  → l_hip_yaw     → hip_yaw_l_joint    (注意：非 T_leg[2])
+  54: 3    # MOTOR_LEG_LEFT_4  → l_knee        → knee_pitch_l_joint
+  55: 4    # MOTOR_LEG_LEFT_5  → l_ankle_pitch → ankle_pitch_l_joint
+  56: 5    # MOTOR_LEG_LEFT_6  → l_ankle_roll  → ankle_roll_l_joint
+  61: 6    # MOTOR_LEG_RIGHT_1 → r_hip_roll    → hip_roll_r_joint
+  62: 8    # MOTOR_LEG_RIGHT_2 → r_hip_pitch   → hip_pitch_r_joint  (注意：非 T_leg[7])
+  63: 7    # MOTOR_LEG_RIGHT_3 → r_hip_yaw     → hip_yaw_r_joint    (注意：非 T_leg[8])
+  64: 9    # MOTOR_LEG_RIGHT_4 → r_knee        → knee_pitch_r_joint
+  65: 10   # MOTOR_LEG_RIGHT_5 → r_ankle_pitch → ankle_pitch_r_joint
+  66: 11   # MOTOR_LEG_RIGHT_6 → r_ankle_roll  → ankle_roll_r_joint
+
+# ========== CAN/腿中间向量下标 j → T_leg[i] 置换表 ==========
+# bag 中 /leg/status CAN 顺序沿用历史 Deploy 中间向量排列（髋为 R–P–Y）：
+#   j=0: l_hip_roll, j=1: l_hip_pitch, j=2: l_hip_yaw, j=3: l_knee, j=4: l_ankle_pitch, j=5: l_ankle_roll
+#   j=6: r_hip_roll, j=7: r_hip_pitch, j=8: r_hip_yaw, j=9: r_knee, j=10: r_ankle_pitch, j=11: r_ankle_roll
+# 对应 T_leg[i]（Ultra，髋为 R–Y–P）：
+#   j=0→i=0, j=1→i=2, j=2→i=1, j=3→i=3, j=4→i=4, j=5→i=5
+#   j=6→i=6, j=7→i=8, j=8→i=7, j=9→i=9, j=10→i=10, j=11→i=11
+deploy_j_to_t_leg_i: [0, 2, 1, 3, 4, 5, 6, 8, 7, 9, 10, 11]

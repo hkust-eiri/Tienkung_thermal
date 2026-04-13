@@ -6,10 +6,8 @@ tienkung_thermal.egg-info/SOURCES.txt
 tienkung_thermal.egg-info/dependency_links.txt
 tienkung_thermal.egg-info/requires.txt
 tienkung_thermal.egg-info/top_level.txt
-tienkung_thermal/datasets/__init__.py
-tienkung_thermal/datasets/base.py
-tienkung_thermal/lab_hooks/__init__.py
-tienkung_thermal/lab_hooks/contracts.py
-tienkung_thermal/models/__init__.py
-tienkung_thermal/models/inference.py
-tienkung_thermal/models/predictor.py
+tienkung_thermal/bags/__init__.py
+tienkung_thermal/bags/ct_scale_config.py
+tienkung_thermal/bags/mapping.py
+tienkung_thermal/bags/pipeline.py
+tienkung_thermal/bags/rosbags_types.py

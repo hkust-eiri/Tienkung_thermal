@@ -4,7 +4,8 @@
 > **适用范围**: `TienKung Ultra` 腿部 `12` 个关节  
 > **监督信号**: `bodyctrl_msgs/msg/MotorStatus.temperature`，单标量 `float32`，单位 `°C`  
 > **模型约束**: 因果 `LSTM`，禁用 `BiLSTM`，不引入 G1/29DOF/双温度通道正文方案  
-> **验收口径**: 未来 `15 s`，`12` 关节等权平均 `MAE <= 1.5°C`，单次前向推理 `<= 5 ms`
+> **验收口径**: 未来 `15 s`，`12` 关节等权平均 `MAE <= 1.5°C`，单次前向推理 `<= 5 ms`  
+> **工程网格**: `500 Hz`（步长 `2 ms`），与 `plan.md` §4 及 `dataset_leg_status_h5.md` 一致
 
 ---
 
@@ -35,10 +36,10 @@ f_\theta\!\left(\mathbf{X}^{(i)}_t, i\right) \rightarrow \hat{\mathbf{y}}^{(i)}_
 
 ### 1.2 采样与预测视距
 
-- 统一训练网格采用 `20 Hz`。
-- 输入窗口长度固定为 `L = 100`，对应约 `5 s` 历史。
-- 预测 horizon 采用 `H = 9` 个视距点，对应步数 `h = [10, 20, 40, 60, 100, 140, 200, 240, 300]`。
-- 在 `20 Hz` 下，上述 horizon 对应 `0.5 s, 1.0 s, 2.0 s, 3.0 s, 5.0 s, 7.0 s, 10.0 s, 12.0 s, 15.0 s`。
+- 统一训练网格采用 **`500 Hz`**（步长 `2 ms`），与 `plan.md` §4 及 `dataset_leg_status_h5.md` 一致。
+- 输入窗口长度固定为 **`L = 2500`**，对应约 `5 s` 历史。
+- 预测 horizon 采用 `H = 9` 个视距点，对应步数 `h = [250, 500, 1000, 1500, 2500, 3500, 5000, 6000, 7500]`。
+- 在 `500 Hz` 下，上述 horizon 对应 `0.5 s, 1.0 s, 2.0 s, 3.0 s, 5.0 s, 7.0 s, 10.0 s, 12.0 s, 15.0 s`。
 - 主验收仅看 `15.0 s` 对应视距与 `12` 关节等权平均 `MAE`。
 
 ### 1.3 工程约束
@@ -49,12 +50,14 @@ f_\theta\!\left(\mathbf{X}^{(i)}_t, i\right) \rightarrow \hat{\mathbf{y}}^{(i)}_
 | 训练损失 | 关节级 `Huber + MAE`，支持 `w_0..w_11` 训练权重 |
 | 推理因果性 | 仅使用 `t` 时刻及之前的数据 |
 | 模型时延 | 单次前向 `<= 5 ms`（FP16） |
-| 数据边界 | 原始观测仅来自 `Deploy_Tienkung` 与 `TienKung-Lab` 中已明示接口 |
+| 工程网格 | `500 Hz`（步长 `2 ms`），输入窗口 `L = 2500`（约 `5 s`） |
+| 数据边界 | 原始观测仅来自 `/leg/status`（`MotorStatusMsg`）与可选 `/imu/status`（`Imu`），以 `ros2ws` 中 `.msg` 定义为界 |
+| 数据质量 | `MotorStatus.error ≠ 0` 的帧整帧丢弃，不进入训练或评估 |
 
 ### 1.4 因果性与接口边界
 
 - 禁止使用未来帧、双向循环网络或任何离线平滑结果作为在线特征。
-- `TienKung-Lab` 不提供可作为监督的电机温度真值；温度标签仅能来自 Deploy 的 `/leg/status`。
+- `TienKung-Lab` 不提供可作为监督的电机温度真值；温度标签仅能来自 `data/bags/` 中 `/leg/status` 的实机录制（消息定义以 `Tienkung/ros2ws` 为准）。
 - 所有特征必须可由 `plan.md` 白名单中的字段或其确定性后处理得到。
 
 ---
@@ -80,20 +83,21 @@ f_\theta\!\left(\mathbf{X}^{(i)}_t, i\right) \rightarrow \hat{\mathbf{y}}^{(i)}_
 | 10 | `ankle_pitch_r_joint` |
 | 11 | `ankle_roll_r_joint` |
 
-Deploy 中腿部中间向量的髋关节顺序是 `roll-pitch-yaw`，与 Ultra 的 `roll-yaw-pitch` 不一致，因此：
+bag 中 `/leg/status` 各电机的 CAN 排列沿用历史 Deploy 腿中间向量顺序，髋关节为 `roll-pitch-yaw`，与 Ultra 的 `roll-yaw-pitch` 不一致，因此：
 
-- 禁止直接把 Deploy 腿向量下标当作 `T_leg[i]`。
-- 必须先依据关节语义名或 `CAN id -> name` 的固定映射，将 Deploy 数据重排到 `T_leg[i]`。
-- `ct_scale[j]` 也必须先在 Deploy 下标空间对齐，再映射到 Ultra 下标 `i`。
+- 禁止直接把 bag 中的 CAN 顺序下标当作 `T_leg[i]`。
+- 必须先依据关节语义名或 `CAN id -> name` 的固定映射（`ros2ws` 中 `MotorName.msg`），将 bag 数据重排到 `T_leg[i]`。
+- `ct_scale[j]`（来自 `ct_scale_profiles.yaml` 或录包同期机载快照）也必须先在 CAN 下标空间对齐，再映射到 Ultra 下标 `i`。
 
 ### 2.2 核心数据流
 
 ```mermaid
 flowchart LR
-  deployStatus[Deploy_leg_status] --> nameMapping[NameBasedMappingToT_leg]
-  deployStatus --> imuContext[IMU9DOptional]
-  nameMapping --> featureBuilder[FeatureBuilder]
-  imuContext --> featureBuilder
+  rosbag[data/bags rosbag2] --> legStatus[/leg/status MotorStatusMsg]
+  rosbag --> imuStatus[/imu/status Optional]
+  legStatus --> nameMapping[CAN_ID_to_T_leg_Ultra]
+  imuStatus --> featureBuilder[FeatureBuilder]
+  nameMapping --> featureBuilder
   featureBuilder --> lstmModel[CausalLSTM]
   lstmModel --> horizonPred[FutureTemperatureInCelsius]
   horizonPred --> offlineEval[MAE15sAcceptance]
@@ -102,21 +106,26 @@ flowchart LR
 
 ### 2.3 原始观测白名单
 
+以 `ros2ws` 中 `MotorStatus.msg` 全字段为界（见 `plan.md` §1.3.2）：
+
 | 逻辑量 | 来源 | 说明 |
 |:-------|:-----|:-----|
-| `q` | `one.pos` | 关节位置 |
-| `dq` | `one.speed` | 关节角速度 |
-| `current` | `one.current` | 电流 |
-| `tau_est` | `current * ct_scale[j]` | 估计力矩 |
-| `T` | `one.temperature` | 温度标量，单位 `°C` |
+| `q` | `one.pos` | 关节位置（rad） |
+| `dq` | `one.speed` | 关节角速度（rad/s） |
+| `current` | `one.current` | 电机电流（A），原始值 |
+| `tau_est` | `current * ct_scale[j]` | 估计力矩；`ct_scale` 来自 `ct_scale_profiles.yaml` 或录包同期机载快照，需按 §1.2.1 映射 |
+| `T` | `one.temperature` | 温度标量，单位 `°C`（**监督标签**） |
+| `V` | `one.voltage` | 电机端电压（V），约 `61–62 V`；反映负载与供电状态 |
+| `error` | `one.error` | 电机故障码（`uint32`）；**仅用于数据质量过滤**，`error ≠ 0` 整帧丢弃，不作为 LSTM 输入 |
 | `imu_9d` | `/imu/status` | 姿态角、角速度、线加速度共 `9` 维，可选 |
 
 ### 2.4 禁止直接纳入基线模型的量
 
 以下量不得写入基线模型输入，除非先被正式纳入 `plan.md` 白名单：
 
-- 电压 `vol`
-- 原生 `ddq` 话题
+- 原生 `ddq` 话题（当前由 `speed` 数值差分替代）
+- `MotorStatus1` 双温度通道（`motortemperature` + `mostemperature`，topic 名未确认）
+- `PowerStatus` 板级热数据（`leg_a_temp` / `leg_b_temp` 等）
 - BMS、主板温度、风扇状态
 - 外置温湿度计
 - 第三方机器人或旧版 G1 相关字段
@@ -131,33 +140,60 @@ flowchart LR
 虽然实测接口仅提供单个温度标量 `T`，仍可用简化热平衡关系指导特征选择：
 
 \[
-C \frac{dT}{dt} = \alpha \tau_{est}^2 + \beta \lvert dq \rvert + \gamma \lvert ddq \rvert - k\left(T - T_{amb}^{proxy}\right) + q_{adj}
+C \frac{dT}{dt} = \alpha \tau_{est}^2 + \beta \lvert dq \rvert + \gamma \lvert ddq \rvert + \delta P_{elec} - k\left(T - T_{amb}^{proxy}\right) + q_{adj}
 \]
 
 其中：
 
-- `tau_est^2` 对应负载电流引起的电气发热代理。
-- `|dq|` 对应与速度相关的机械损耗代理。
+- `tau_est^2` 对应负载电流引起的电气发热代理（焦耳热，见 `plan.md` §2.1.2.1）。
+- `|dq|` 对应与速度相关的机械损耗代理（见 `plan.md` §2.1.2.2）。
 - `|ddq|` 对应动态冲击和工况切换强度。
+- `P_elec ≈ V × I` 为电功率代理；`V`（电机端电压）与 `I`（电流）从电功率等式两侧互补刻画实际损耗（见 `plan.md` §2.1.2.3）。
 - `T` 记录当前热状态。
 - `q_adj` 表示同侧相邻腿关节带来的结构热耦合。
 - `T_amb^{proxy}` 不直接建模为环境温度；基线仅允许通过 IMU 上下文间接提供整体工况信息。
 
 ### 3.2 每关节基线特征
 
-对每个关节 `T_leg[i]`，在时间步 `t` 形成如下基线特征：
+对每个关节 `T_leg[i]`，在时间步 `t` 可使用的特征分为**原始量**（直接来自 `MotorStatus` 字段）和**派生量**（由原始量经确定性公式计算）两类。
+
+#### 3.2.1 原始量（Raw）
 
 | 特征名 | 定义 | 维度 | 备注 |
 |:-------|:-----|:----:|:-----|
-| `q` | `one.pos` | 1 | 原始位置 |
-| `dq` | `one.speed` | 1 | 原始角速度 |
-| `tau_est` | `one.current * ct_scale[j]` | 1 | 估计力矩 |
+| `q` | `one.pos` | 1 | 关节位置（rad） |
+| `dq` | `one.speed` | 1 | 关节角速度（rad/s） |
+| `current` | `one.current` | 1 | 电机电流（A），原始值 |
 | `T` | `one.temperature` | 1 | 当前温度 `°C` |
-| `tau_sq` | `tau_est ** 2` | 1 | 焦耳热代理 |
-| `dq_abs` | `abs(dq)` | 1 | 机械损耗代理 |
-| `ddq_abs` | `abs(diff(dq) / dt)` | 1 | 仅可由 `speed` 数值差分得到 |
+| `V` | `one.voltage` | 1 | 电机端电压（V）；电压降反映负载，与热产生关联（`plan.md` §2.1.2.3） |
 
-基线输入维度为 `D_base = 7`。
+仅原始量时输入维度为 **`D_raw = 5`**。
+
+#### 3.2.2 派生量（Derived）
+
+| 特征名 | 定义 | 维度 | 备注 |
+|:-------|:-----|:----:|:-----|
+| `tau_est` | `one.current * ct_scale[j]` | 1 | 估计力矩；依赖外部 `ct_scale`（`plan.md` §2.1.2.1） |
+| `tau_sq` | `tau_est ** 2` | 1 | 焦耳热代理 |
+| `dq_abs` | `abs(dq)` | 1 | 机械损耗代理（`plan.md` §2.1.2.2） |
+| `ddq_abs` | `abs(diff(dq) / dt)` | 1 | 仅可由 `speed` 在 `500 Hz` 网格上数值差分得到 |
+
+派生量共 `4` 维。原始 + 派生时输入维度为 **`D_base = 9`**。
+
+#### 3.2.3 特征模式选择
+
+通过配置 `features.use_derived` 控制是否拼接派生量：
+
+| 模式 | `use_derived` | 输入列 | `D` |
+|:-----|:------------:|:-------|:---:|
+| **raw-only** | `false` | `q, dq, current, T, V` | **5** |
+| **full**（默认） | `true` | `q, dq, current, tau_est, T, V, tau_sq, dq_abs, ddq_abs` | **9** |
+
+**raw-only 模式的设计意图**：
+
+- 消除对外部 `ct_scale` 标定系数的依赖——当 `ct_scale` 为占位值或精度不确定时，`tau_est` / `tau_sq` 可能引入噪声而非有效信息。
+- 验证 LSTM 能否仅从原始物理量（位置、速度、电流、温度、电压）学到足够的热动态特征，作为派生量贡献度的基准对照。
+- 在线部署时减少预处理计算（无需差分、平方、绝对值运算）。
 
 ### 3.3 可选上下文特征
 
@@ -168,7 +204,7 @@ C \frac{dT}{dt} = \alpha \tau_{est}^2 + \beta \lvert dq \rvert + \gamma \lvert d
 - 左腿只与左腿相邻，右腿只与右腿相邻。
 - 采用两槽位 `T_prev_same_side` 与 `T_next_same_side`。
 - 边界关节缺少某一侧邻居时，使用最近的有效同侧邻居温度镜像填充。
-- 该增强版输入维度为 `D_adj = 2`，总维度为 `D = 9`。
+- 该增强版输入维度为 `D_adj = 2`。
 
 #### 3.3.2 IMU 9 维上下文
 
@@ -178,19 +214,28 @@ C \frac{dT}{dt} = \alpha \tau_{est}^2 + \beta \lvert dq \rvert + \gamma \lvert d
 - `angular_velocity.x`, `angular_velocity.y`, `angular_velocity.z`
 - `linear_acceleration.x`, `linear_acceleration.y`, `linear_acceleration.z`
 
-若启用 IMU，上述 `9` 维在序列维度上与每个关节特征对齐拼接：
+若启用 IMU，上述 `9` 维在序列维度上与每个关节特征对齐拼接。
 
-- 仅基线特征: `D = 7`
-- 基线 + 邻域: `D = 9`
-- 基线 + IMU: `D = 16`
-- 基线 + 邻域 + IMU: `D = 18`
+完整维度组合表（`use_derived` × 可选特征）：
+
+| `use_derived` | 邻域 | IMU | `D` |
+|:-------------:|:----:|:---:|:---:|
+| `false`（raw-only） | — | — | **5** |
+| `false` | 启用 | — | **7** |
+| `false` | — | 启用 | **14** |
+| `false` | 启用 | 启用 | **16** |
+| `true`（full，默认） | — | — | **9** |
+| `true` | 启用 | — | **11** |
+| `true` | — | 启用 | **18** |
+| `true` | 启用 | 启用 | **20** |
 
 ### 3.4 预处理约定
 
 | 项目 | 规则 |
 |:-----|:-----|
-| 降采样 | 所有原始序列统一到 `20 Hz` |
-| `ddq_abs` | 由相邻帧 `dq` 数值差分后取绝对值 |
+| 重采样 | 原始 `~1 kHz` 序列经**线性插值**统一到 **`500 Hz`**（步长 `2 ms`），与 `plan.md` §4 一致 |
+| `error` 过滤 | 任一腿部电机 `error ≠ 0` 的原始帧**整帧丢弃**，不进入有效序列（`plan.md` §2.1.1） |
+| `ddq_abs` | 由相邻帧 `dq` 在 `500 Hz` 网格上数值差分后取绝对值 |
 | 温度平滑 | 对 `T` 可选使用 `EMA(alpha = 0.05)` |
 | 裁剪 | 仅允许对明显异常值做工程裁剪，需保留原值日志 |
 | 归一化 | 使用训练集统计量做 `Z-score` |
@@ -230,8 +275,8 @@ S_t = \alpha Y_t + (1 - \alpha) S_{t-1}, \quad \alpha = 0.05
 ### 4.2 网络拓扑
 
 ```text
-Input: state_seq (B, L, D), joint_index (B,)
-        │
+Input: state_seq (B, 2500, D), joint_index (B,)
+        │                          D = 9 (base) / 11 / 18 / 20
         ▼
 Linear(D -> d_proj)
 LayerNorm
@@ -255,21 +300,22 @@ GELU
 Linear(d_mid -> H)
         │
         ▼
-Predicted future temperature in Celsius: (B, H)
+Predicted future temperature in Celsius: (B, H=9)
 ```
 
 ### 4.3 推荐超参数
 
 | 超参数 | 推荐值 | 说明 |
 |:-------|:------:|:-----|
-| `L` | `100` | 5 秒历史窗口 |
+| `L` | `2500` | 5 秒历史窗口（`500 Hz`） |
 | `H` | `9` | 对应 `0.5 s` 到 `15 s` |
+| `D` (input_dim) | `9` | 基线特征维度（`q, dq, current, tau_est, T, V, tau_sq, dq_abs, ddq_abs`） |
 | `d_proj` | `32` | 输入投影维度 |
 | `d_hidden` | `96` | LSTM 隐层维度 |
 | `n_layers` | `2` | LSTM 层数 |
 | `p_drop` | `0.10` | Dropout |
 | `d_mid` | `64` | 输出头中间层维度 |
-| 参数规模 | `~110K` | 共享骨干 + 12 头，量级可控 |
+| 参数规模 | `~120K` | 共享骨干 + 12 头，量级可控 |
 
 ### 4.4 PyTorch 参考定义
 
@@ -281,7 +327,7 @@ import torch.nn as nn
 class UltraThermalLSTM(nn.Module):
     def __init__(
         self,
-        input_dim: int = 7,
+        input_dim: int = 9,
         proj_dim: int = 32,
         hidden_dim: int = 96,
         num_layers: int = 2,
@@ -375,46 +421,58 @@ class UltraThermalLSTM(nn.Module):
 
 ## 6. 数据流水线
 
-### 6.1 从 Deploy 到训练样本的处理流程
+### 6.1 从 rosbag 到训练样本的处理流程
 
-1. 订阅 `/leg/status`，可选订阅 `/imu/status`。
-2. 依据关节语义名将 Deploy 数据映射到 `T_leg[0..11]`。
-3. 计算 `tau_est = current * ct_scale[j]`。
-4. 将时序降采样或重采样到 `20 Hz`。
-5. 对 `dq` 做数值差分得到 `ddq_abs`。
-6. 计算 `tau_sq`、`dq_abs`，并可选对 `T` 执行 EMA。
-7. 按 session 划分 Train / Val / Test。
+1. 从 rosbag 解码 `/leg/status`（`MotorStatusMsg`），可选解码 `/imu/status`。
+2. 用每条 `MotorStatus` 的 `name`（CAN ID）映射到 Ultra `T_leg[0..11]`（§2.1 映射表）。
+3. **丢弃整帧**：`len(status) ≠ 12`、CAN 未知、同槽位重复、或**任一关节 `error ≠ 0`**。
+4. 计算 `tau_est = current * ct_scale[j]`（`ct_scale` 按录制日期多版本选用）。
+5. 在有效时间序列上以 **`numpy.interp` 线性插值**重采样到 **`500 Hz`**（步长 `2 ms`）。
+6. 在 `500 Hz` 网格上计算 `tau_sq`、`dq_abs`、`ddq_abs`，并可选对 `T` 执行 EMA。
+7. 按 session 划分 Train / Val / Test（整段 session 不得拆分到不同集合）。
 8. 用滑动窗口生成 `[L, D] -> [H]` 样本。
 
-### 6.2 建议的 HDF5 组织
+### 6.2 HDF5 组织（与 `dataset_leg_status_h5.md` 对齐）
 
 ```text
-{session_name}.h5
-├── metadata/
-│   ├── sample_rate_hz          # int, 20
-│   ├── source_topic            # str, /leg/status
-│   ├── mapping_version         # str, Ultra_T_leg_v1
-│   └── notes                   # str
-├── timestamps                  # float64, shape (N,)
+{session_id}.h5
+├── (根级属性)
+│   ├── sample_rate_hz          # int, 500
+│   ├── dt_grid_s               # float, 0.002
+│   ├── source_rosbag           # str, rosbag2 目录绝对路径
+│   ├── t_leg_order             # str, 12 个 Ultra 关节名（逗号分隔）
+│   ├── ct_scale_profile        # str, ct_scale profile 名
+│   ├── ct_scale_per_t_leg_json # str, 12 维 ct_scale 快照（Ultra 顺序）
+│   └── export_timestamp_utc    # str, ISO 8601
+├── timestamps                  # float64, shape (N,)，秒，步长 0.002 s
 ├── joints/
 │   ├── q                       # float32, shape (N, 12)
 │   ├── dq                      # float32, shape (N, 12)
 │   ├── current                 # float32, shape (N, 12)
+│   ├── temperature             # float32, shape (N, 12)，°C，监督标签
+│   ├── voltage                 # float32, shape (N, 12)，V
 │   ├── tau_est                 # float32, shape (N, 12)
-│   ├── temp_c                  # float32, shape (N, 12)
 │   ├── tau_sq                  # float32, shape (N, 12)
+│   ├── dq_abs                  # float32, shape (N, 12)
 │   └── ddq_abs                 # float32, shape (N, 12)
-└── imu/
-    ├── euler                   # float32, shape (N, 3)
-    ├── angular_velocity        # float32, shape (N, 3)
-    └── linear_acceleration     # float32, shape (N, 3)
+├── imu/                        # v1 纯腿基线不导出；后续 IMU 消融时扩展
+│   ├── euler                   # float32, shape (N, 3)
+│   ├── angular_velocity        # float32, shape (N, 3)
+│   └── linear_acceleration     # float32, shape (N, 3)
+└── metadata/                   # HDF5 属性，用于质检与追溯
+    ├── n_raw_messages_leg_status
+    ├── n_valid_raw_frames
+    ├── n_skipped_error_nonzero
+    └── n_grid_frames           # = len(timestamps)
 ```
 
 说明：
 
-- `temp_c` 是唯一温度监督字段。
-- 不再定义 `temperature_0` / `temperature_1`。
-- 若原始 `current` 希望保留，应与 `tau_est` 同时落盘以便追溯。
+- `temperature` 是唯一温度监督字段（`°C`）。
+- 不再定义 `temperature_0` / `temperature_1`（双通道待 `MotorStatus1` topic 确认后再议）。
+- `current` 与 `tau_est` 同时落盘，便于追溯 `ct_scale` 乘积。
+- `voltage` 作为输入特征落盘。
+- 重采样方式为 `numpy.interp` 线性插值到均匀 `2 ms` 网格。
 
 ### 6.3 Dataset 参考实现
 
@@ -429,12 +487,14 @@ class UltraThermalDataset(Dataset):
     def __init__(
         self,
         h5_paths: list[str],
-        seq_len: int = 100,
-        horizon_steps: list[int] = [10, 20, 40, 60, 100, 140, 200, 240, 300],
+        seq_len: int = 2500,
+        horizon_steps: list[int] | None = None,
         use_adjacent_temp: bool = False,
         use_imu: bool = False,
         norm_stats: dict | None = None,
     ) -> None:
+        if horizon_steps is None:
+            horizon_steps = [250, 500, 1000, 1500, 2500, 3500, 5000, 6000, 7500]
         self.seq_len = seq_len
         self.horizon_steps = horizon_steps
         self.max_horizon = max(horizon_steps)
@@ -461,17 +521,20 @@ class UltraThermalDataset(Dataset):
         with h5py.File(path, "r") as f:
             q = f["joints/q"][sl, joint_idx]
             dq = f["joints/dq"][sl, joint_idx]
+            current = f["joints/current"][sl, joint_idx]
             tau_est = f["joints/tau_est"][sl, joint_idx]
-            temp_c = f["joints/temp_c"][sl, joint_idx]
+            temp = f["joints/temperature"][sl, joint_idx]
+            voltage = f["joints/voltage"][sl, joint_idx]
             tau_sq = f["joints/tau_sq"][sl, joint_idx]
+            dq_abs = f["joints/dq_abs"][sl, joint_idx]
             ddq_abs = f["joints/ddq_abs"][sl, joint_idx]
 
-            features = [q, dq, tau_est, temp_c, tau_sq, np.abs(dq), ddq_abs]
+            features = [q, dq, current, tau_est, temp, voltage, tau_sq, dq_abs, ddq_abs]
 
             if self.use_adjacent_temp:
                 prev_idx, next_idx = same_side_neighbors(joint_idx)
-                prev_temp = f["joints/temp_c"][sl, prev_idx]
-                next_temp = f["joints/temp_c"][sl, next_idx]
+                prev_temp = f["joints/temperature"][sl, prev_idx]
+                next_temp = f["joints/temperature"][sl, next_idx]
                 features.extend([prev_temp, next_temp])
 
             if self.use_imu:
@@ -490,7 +553,7 @@ class UltraThermalDataset(Dataset):
 
             target = np.array(
                 [
-                    f["joints/temp_c"][start_t + self.seq_len + h - 1, joint_idx]
+                    f["joints/temperature"][start_t + self.seq_len + h - 1, joint_idx]
                     for h in self.horizon_steps
                 ],
                 dtype=np.float32,
@@ -533,7 +596,7 @@ class UltraThermalDataset(Dataset):
 ### 7.2 训练伪代码
 
 ```python
-model = UltraThermalLSTM(input_dim=D, horizon=9)
+model = UltraThermalLSTM(input_dim=D, horizon=9)  # D=9 (base), 11, 18, or 20
 optimizer = torch.optim.AdamW(model.parameters(), lr=1e-3, weight_decay=1e-4)
 scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=20, T_mult=2)
 
@@ -569,11 +632,14 @@ for epoch in range(200):
 | A1 | `ddq_abs` | 启用 | 移除 | `15 s MAE` |
 | A2 | 邻域温度 | 关闭 | 启用 `T_prev/T_next` | `15 s MAE` |
 | A3 | IMU 9 维 | 关闭 | 启用 | `15 s MAE` 与时延 |
-| A4 | 序列长度 `L` | `100` | `50`, `150` | MAE 与时延 |
+| A4 | 序列长度 `L` | `2500` | `1250`, `5000` | MAE 与时延 |
 | A5 | `d_hidden` | `96` | `64`, `128` | MAE 与参数量 |
 | A6 | 输出结构 | 12 头 | 全共享单头 | MAE 与稳定性 |
+| A7 | `voltage` | 启用 | 移除 | `15 s MAE`（验证电压特征贡献） |
+| A8 | `current`（原始） | 启用 | 移除（仅保留 `tau_est`） | `15 s MAE`（原始电流 vs 仅力矩估计） |
+| A9 | 派生量整体 | `use_derived=true`（D=9） | `use_derived=false`（D=5，仅原始量） | `15 s MAE`（验证派生量整体贡献；消除 `ct_scale` 依赖后的基准） |
 
-消融结论应以主 Gate 指标为核心，不得仅凭训练损失决定最终方案。
+消融结论应以主 Gate 指标为核心，不得仅凭训练损失决定最终方案。A9 为 raw-only 与 full 基线的核心对照实验。
 
 ---
 
@@ -584,7 +650,7 @@ for epoch in range(200):
 | 指标 | 定义 | 说明 |
 |:-----|:-----|:-----|
 | `MAE@h_k` | 各 horizon 的平均绝对误差 | 报告视距退化趋势 |
-| `MAE_15s_equal_weight` | `h = 300` 时 12 关节等权平均 MAE | 主验收指标 |
+| `MAE_15s_equal_weight` | `h = 7500` 时 12 关节等权平均 MAE | 主验收指标 |
 | `MAE_high_load` | 高负载片段上的 MAE | 风险评估 |
 | `MAE_cooling` | 冷却片段上的 MAE | 冷却动态评估 |
 | `MaxAE` | 全测试集最大单点误差 | 安全边界观察 |
@@ -592,10 +658,11 @@ for epoch in range(200):
 
 ### 8.2 分关节误差热力图
 
-误差热力图维度固定为 `12 x H`，行对应 `T_leg[0..11]`，列对应 9 个 horizon：
+误差热力图维度固定为 `12 x H`，行对应 `T_leg[0..11]`，列对应 9 个 horizon（步数 @ `500 Hz`）：
 
 ```text
-              0.5s   1.0s   2.0s   3.0s   5.0s   7.0s   10.0s  12.0s  15.0s
+              0.5s    1.0s    2.0s    3.0s    5.0s    7.0s    10.0s   12.0s   15.0s
+              (250)   (500)   (1000)  (1500)  (2500)  (3500)  (5000)  (6000)  (7500)
 hip_roll_l     ...
 hip_yaw_l      ...
 hip_pitch_l    ...
@@ -659,7 +726,7 @@ TensorRT FP16 (.engine)
 - TensorRT 与 ONNX 的 `MAE` 偏差应远小于 `0.1°C`
 
 ```python
-dummy_x = torch.randn(1, 100, 7)
+dummy_x = torch.randn(1, 2500, 9)
 dummy_joint = torch.zeros(1, dtype=torch.long)
 
 torch.onnx.export(
@@ -682,10 +749,10 @@ torch.onnx.export(
 Name-based mapping to T_leg[0..11]
         │
         ▼
-Feature update at 20 Hz
+Feature update at 500 Hz (2 ms grid)
         │
         ▼
-Per-joint ring buffer (L = 100)
+Per-joint ring buffer (L = 2500)
         │
         ▼
 TensorRT FP16 inference
@@ -697,7 +764,7 @@ Future temperature horizons in Celsius
 Thermal guard / monitoring
 ```
 
-在线阶段只能消费已存在的 Deploy Topic 与字段，不得临时引入新接口。
+在线阶段只能消费 `ros2ws` 中已定义的 `/leg/status` 与 `/imu/status` 字段，不得临时引入新接口。
 
 ### 9.3 热保护逻辑
 
@@ -753,8 +820,11 @@ def thermal_protection(pred_temp_c: np.ndarray) -> str:
 - 正文只讨论 `Ultra` 腿部 `12` 关节。
 - 温度监督只使用 `MotorStatus.temperature` 单标量 `°C`。
 - 不出现 `temperature[0]` / `temperature[1]` 双通道正文依赖。
-- 不出现 `29` 关节、G1、电压、BMS、主板温、风扇等基线输入依赖。
-- 所有 tensor 形状、horizon、验收标准均与 `docs/plan.md` 保持一致。
+- 不出现 `29` 关节、G1、BMS、主板温、风扇等基线输入依赖。
+- `voltage` 与 `current` 作为准许的基线输入特征（与 `plan.md` §2.1.2 一致）。
+- 工程网格为 `500 Hz`，`L = 2500`，horizon 步数按 `500 Hz` 计算。
+- `error ≠ 0` 帧整帧丢弃，不进入训练或评估。
+- 所有 tensor 形状、horizon、验收标准均与 `docs/plan.md` 及 `docs/dataset_leg_status_h5.md` 保持一致。
 
 ---
 
@@ -780,15 +850,19 @@ def thermal_protection(pred_temp_c: np.ndarray) -> str:
 | Horizon 索引 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 |
 |:-------------|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | 未来时间（秒） | 0.5 | 1.0 | 2.0 | 3.0 | 5.0 | 7.0 | 10.0 | 12.0 | 15.0 |
-| 未来步数（20 Hz） | 10 | 20 | 40 | 60 | 100 | 140 | 200 | 240 | 300 |
+| 未来步数（500 Hz） | 250 | 500 | 1000 | 1500 | 2500 | 3500 | 5000 | 6000 | 7500 |
 
 ## 附录 C: 术语约定
 
-- `temp_c`: 温度标量，单位 `°C`
+- `temperature`: 温度标量，单位 `°C`（HDF5 字段名；即 `MotorStatus.temperature`）
+- `current`: 电机电流，单位 `A`（原始值，未乘 `ct_scale`）
+- `voltage`: 电机端电压，单位 `V`（反映负载与供电状态）
 - `tau_est`: 基于 `current * ct_scale[j]` 的估计力矩
 - `tau_sq`: `tau_est` 的平方，作为焦耳热代理
-- `dq_abs`: 角速度绝对值
-- `ddq_abs`: 由 `dq` 数值差分得到的角加速度绝对值
+- `dq_abs`: 角速度绝对值，与速度相关的机械损耗代理
+- `ddq_abs`: 由 `dq` 在 `500 Hz` 网格上数值差分得到的角加速度绝对值
+- `error`: 电机故障码（`uint32`），`error ≠ 0` 帧整帧丢弃，仅用于数据质量过滤
 - `equal_weight_mae`: 12 关节等权平均 MAE
+- `ct_scale`: 电流到力矩的标定系数，来自 `ct_scale_profiles.yaml` 或录包同期机载 `tg22_config.yaml` 快照，按录制日期多版本选用
 
-*文档结束。若与其它旧稿冲突，以 `docs/plan.md` 与 `configs/leg_index_mapping.yaml` 为准。*
+*文档结束。若与其它旧稿冲突，以 `docs/plan.md`、`docs/dataset_leg_status_h5.md` 与 `configs/leg_index_mapping.yaml` 为准。*
