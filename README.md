@@ -54,7 +54,7 @@ python scripts/check/p0_check.py --dt 0.0025   # 可选：与 tg22_config 的 dt
 
 ## 与 Deploy_Tienkung 的版本约定
 
-- 推理若部署在 C++：可先用 **TorchScript / ONNX**（`scripts/export_onnx_or_torchscript.py`）；与现有 **OpenVINO** 策略并行加载需自行在 `RobotInterface` 或独立节点中集成（本包提供导出脚本占位）。
+- 推理若部署在 C++：可先用 **TorchScript / ONNX**（`scripts/export_onnx_or_torchscript.py`，待实现）；与现有 **OpenVINO** 策略并行加载需自行在 `RobotInterface` 或独立节点中集成。Python 侧推理可直接使用 `scripts/inference.py`。
 - 控制周期：Deploy `tg22_config.yaml` 中 `dt` 与训练数据时间对齐方式应在 `configs/thermal_predictor.yaml` 中写明 `target_hz` 或 `decimation` 约定。
 
 ## 目录说明
@@ -63,7 +63,31 @@ python scripts/check/p0_check.py --dt 0.0025   # 可选：与 tg22_config 的 dt
 - `tienkung_thermal/datasets/`：rosbag/表格 → `Dataset`。
 - `tienkung_thermal/models/`：温度预测网络与轻量 torch 推理 API。
 - `tienkung_thermal/lab_hooks/`：与 Lab 对接的接口与形状约定（无强制 patch）。
-- `scripts/`：提取、训练、导出命令行入口。
+- `scripts/`：提取、训练、评估、推理命令行入口。
+
+## 训练、评估与推理
+
+```bash
+# 训练（详见 docs/training_ultra_lstm.md）
+python scripts/train.py --config configs/ultra_thermal_lstm.yaml --tensorboard
+
+# 在 test 集上评估
+python scripts/evaluate.py --checkpoint checkpoints/best_ultra_thermal.pt
+
+# 单窗口推理
+python scripts/inference.py \
+    --checkpoint checkpoints/best_ultra_thermal.pt \
+    --h5 data/processed/leg_status_500hz/<session>.h5 \
+    --joint 3 --start-frame 10000
+
+# 滑窗推理，输出 CSV
+python scripts/inference.py \
+    --checkpoint checkpoints/best_ultra_thermal.pt \
+    --h5 data/processed/leg_status_500hz/<session>.h5 \
+    --joint 3 --sliding --output pred_j3.csv
+```
+
+归一化统计量在首次训练时自动计算并保存到 `data/processed/leg_status_500hz/norm_stats.json`，评估和推理脚本会自动加载。
 
 ## License
 

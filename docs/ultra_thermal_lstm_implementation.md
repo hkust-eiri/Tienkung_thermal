@@ -58,8 +58,17 @@ Tienkung_thermal/
     models/
       __init__.py                # 导出 UltraThermalLSTM
       thermal_lstm.py            # UltraThermalLSTM 定义
+    data/
+      norm.py                    # 归一化统计量计算/保存/加载
+      dataset.py                 # UltraThermalDataset（含 log1p + z-score）
+    training/
+      trainer.py                 # 训练循环与 evaluate()
+  scripts/
+    train.py                     # 训练入口
+    evaluate.py                  # 评估脚本（test/val 集完整报告）
+    inference.py                 # 推理脚本（单窗口/滑窗）
   tests/
-    test_thermal_lstm.py         # 形状、多 D、梯度冒烟（若引入 pytest）
+    test_thermal_lstm.py         # 形状、多 D、梯度冒烟
   docs/
     ultra_thermal_lstm_implementation.md  # 本文件
 ```
@@ -166,6 +175,10 @@ horizon_steps: [10, 20, 40, 60, 100, 140, 200, 240, 300]
 | **M3** | 新增 `configs/ultra_thermal_lstm.yaml`（本文件 §5） |
 | **M4** | 新增 `tests/test_thermal_lstm.py`（或等价自检脚本）并文档化 `pip install -e ".[train]"` |
 | **M5** | 数据集、训练循环、评估与 ONNX（对齐 `thermal_lstm_modeling.md` §6–§9） |
+| **M6** | ✅ 输入归一化：`tienkung_thermal/data/norm.py`（Welford 在线统计 + `log1p` 重尾变换 + z-score），`dataset.py` 与 `train.py` 集成 |
+| **M7** | ✅ 评估脚本 `scripts/evaluate.py`：加载 checkpoint 在 test/val 集上输出完整 MAE 报告（Gate 判定、关节×horizon 矩阵） |
+| **M8** | ✅ 推理脚本 `scripts/inference.py`：单窗口与滑窗两种模式，支持 CSV 输出 |
+| **M9** | ONNX 导出脚本（待实现） |
 
 ---
 

@@ -126,7 +126,21 @@ python scripts/train.py --config configs/ultra_thermal_lstm.yaml --tensorboard
 - 若 `optional_adjacent_temp`：`+2`
 - 若 `optional_imu`：`+9`
 
-### 3.5 `training` → `TrainConfig`
+### 3.5 `normalization`（归一化）
+
+| 键 | 默认 | 说明 |
+|:---|:-----|:-----|
+| `method` | `z_score` | 归一化方法；目前仅支持 `z_score`。 |
+| `stats_path` | `null` | 预计算统计量 JSON 路径；`null` 时训练脚本自动从训练集计算并保存到 `data/processed/leg_status_500hz/norm_stats.json`。 |
+| `log1p_fields` | `[ddq_abs, tau_sq]` | z-score 前先做 `log1p(abs(x))` 的重尾特征列表。这些特征的极端值可达 1e4 量级，`log1p` 将其压缩到 ~10 量级后再标准化，显著降低 NaN 风险。 |
+
+**归一化流程**（`tienkung_thermal/data/norm.py` + `dataset.py`）：
+
+1. **统计量计算**：遍历训练集 HDF5，对每个特征维度用 Welford 在线算法计算 mean/std。对 `log1p_fields` 中的特征，先做 `log1p(abs(x))` 再统计。
+2. **保存**：统计量保存为 JSON（含 `mean`、`std`、`log1p_fields`、`feature_names`），供评估/推理复用。
+3. **应用**：`Dataset.__getitem__` 中，先对 `log1p_fields` 列做 `log1p(abs(x))`，再做 `(x - mean) / (std + 1e-8)`。
+
+### 3.6 `training` → `TrainConfig`
 
 | 键 | 默认 | 说明 |
 |:---|:-----|:-----|
@@ -140,7 +154,7 @@ python scripts/train.py --config configs/ultra_thermal_lstm.yaml --tensorboard
 | `early_stopping_patience` | 15 | 验证集监控指标连续不提升的容忍 epoch 数。 |
 | `device` | `cuda` | 当未传 `--device` 时使用。 |
 
-### 3.6 `loss` → `ThermalLoss` / `TrainConfig`
+### 3.7 `loss` → `ThermalLoss` / `TrainConfig`
 
 | 键 | 默认 | 说明 |
 |:---|:-----|:-----|
@@ -149,7 +163,7 @@ python scripts/train.py --config configs/ultra_thermal_lstm.yaml --tensorboard
 | `huber_delta` | 1.0 | Huber 的 `delta`。 |
 | `joint_weights` | 12×1.0 | 长度 12 的列表，按 `joint_index` 对样本加权。 |
 
-### 3.7 `data`（数据路径与划分）
+### 3.8 `data`（数据路径与划分）
 
 | 键 | 说明 |
 |:---|:-----|
@@ -197,7 +211,89 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=. pytest tests/test_thermal_lstm.py 
 
 ---
 
-## 7. 另见
+## 7. 评估脚本：`scripts/evaluate.py`
+
+在 test 或 val 集上对已训练模型做完整评估，输出 Gate 指标、各关节各 horizon 的 MAE 矩阵。
+
+### 7.1 命令行参数
+
+| 参数 | 默认值 | 说明 |
+|:-----|:-------|:-----|
+| `--checkpoint` | **必填** | checkpoint `.pt` 路径。 |
+| `--config` | `configs/ultra_thermal_lstm.yaml` | YAML 配置文件。 |
+| `--split` | `test` | 评估哪个划分：`test` 或 `val`。 |
+| `--raw-only` | 关闭 | 仅使用原始量特征（D=5）。 |
+| `--device` | YAML `training.device` | 推理设备。 |
+| `--batch-size` | YAML `training.batch_size` | 评估 batch size。 |
+| `--num-workers` | `4` | DataLoader 子进程数。 |
+| `--output` | 无 | 结果 JSON 输出路径；不指定则仅打印到终端。 |
+
+### 7.2 示例
+
+```bash
+# 在 test 集上评估
+python scripts/evaluate.py --checkpoint checkpoints/best_ultra_thermal.pt
+
+# 在 val 集上评估，保存 JSON
+python scripts/evaluate.py --checkpoint checkpoints/best_ultra_thermal.pt --split val --output eval_results.json
+
+# raw-only 模型
+python scripts/evaluate.py --checkpoint checkpoints/best_ultra_thermal.pt --raw-only
+```
+
+### 7.3 输出内容
+
+- **Gate 指标**：MAE@15s equal-weight + PASS/FAIL（阈值来自 `acceptance.gate_threshold_celsius`）
+- **各 Horizon 全局 MAE**
+- **各关节 MAE@15s**
+- **关节 × Horizon MAE 矩阵**
+- **最大绝对误差**
+
+---
+
+## 8. 推理脚本：`scripts/inference.py`
+
+对单个 HDF5 session 做推理，支持单窗口和滑窗两种模式。
+
+### 8.1 命令行参数
+
+| 参数 | 默认值 | 说明 |
+|:-----|:-------|:-----|
+| `--checkpoint` | **必填** | checkpoint `.pt` 路径。 |
+| `--config` | `configs/ultra_thermal_lstm.yaml` | YAML 配置文件。 |
+| `--h5` | **必填** | 单个 HDF5 session 路径。 |
+| `--joint` | **必填** | 关节编号 0–11。 |
+| `--start-frame` | 无 | 单窗口模式：起始帧号。 |
+| `--sliding` | 关闭 | 滑窗模式：沿整个 session 输出预测。 |
+| `--stride` | YAML `sequence.stride` | 滑窗步长（帧数）。 |
+| `--raw-only` | 关闭 | 仅使用原始量特征。 |
+| `--device` | YAML `training.device` | 推理设备。 |
+| `--output` | 无 | CSV 输出路径（滑窗模式）。 |
+
+### 8.2 示例
+
+```bash
+# 单窗口推理：从第 10000 帧开始，预测 joint 3
+python scripts/inference.py \
+    --checkpoint checkpoints/best_ultra_thermal.pt \
+    --h5 data/processed/leg_status_500hz/rosbag2_2026_04_07-10_50_21.h5 \
+    --joint 3 --start-frame 10000
+
+# 滑窗推理：输出整条 session 的预测 CSV
+python scripts/inference.py \
+    --checkpoint checkpoints/best_ultra_thermal.pt \
+    --h5 data/processed/leg_status_500hz/rosbag2_2026_04_07-10_50_21.h5 \
+    --joint 3 --sliding --output pred_j3.csv
+```
+
+### 8.3 输出格式
+
+- **单窗口**：终端打印各 horizon 的预测值、实际值、误差。
+- **滑窗 CSV**：列为 `time_s, actual_temp_now, pred_0.5s, pred_1.0s, ..., pred_15.0s`。
+
+---
+
+## 9. 另见
 
 - `configs/ultra_thermal_lstm.yaml` — 完整默认超参与特征开关。  
 - `docs/thermal_lstm_modeling.md` — 特征定义、horizon 与验收口径。  
