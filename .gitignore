@@ -2,3 +2,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
+
+# 本地 bag 与导出样本（体积大，勿提交）
+/data/
