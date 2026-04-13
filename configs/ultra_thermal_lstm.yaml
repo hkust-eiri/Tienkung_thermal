@@ -23,7 +23,7 @@ model:
 
 # ── 序列与时间网格 ────────────────────────────────────────
 sequence:
-  seq_len: 2500           # 5 s @ 500 Hz
+  seq_len: 7500          # 5 s @ 500 Hz
   sample_rate_hz: 500
   dt_s: 0.002             # 步长 2 ms
   stride: 50              # 滑窗步长（帧），50 = 0.1s@500Hz；stride=1 逐帧但极慢

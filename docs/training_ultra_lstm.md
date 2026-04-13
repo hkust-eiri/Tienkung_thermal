@@ -34,8 +34,28 @@ python scripts/train.py --config configs/ultra_thermal_lstm.yaml
 | `--batch-size` | 使用 YAML | 正整数；**覆盖** `training.batch_size`。减小可降低 **GPU 显存**占用。 |
 | `--seq-len` | 使用 YAML | 正整数；**覆盖** `sequence.seq_len`（输入序列长度 **L**）。对显存影响通常比 batch 更大，试验时可适当减小。 |
 | `--num-workers` | `4` | DataLoader 子进程数；主要影响 **CPU 与主机内存**，对 GPU 显存影响很小。 |
+| `--tensorboard-dir DIR` | 关闭 | 将训练曲线写入 **TensorBoard** 事件目录 `DIR`；需已安装 `tensorboard`（见 `requirements.txt` / `pip install -e ".[train]"`）。 |
+| `--tensorboard` | 关闭 | 启用 TensorBoard，等价于日志写入 **`runs/ultra_thermal_<时间戳>/`**（仓库根下）。若同时指定 `--tensorboard-dir`，**以 `--tensorboard-dir` 为准**。 |
 
 **设备解析顺序**：`--device`（若提供）→ 否则 `training.device`。若指定 `cuda` 但当前无 GPU，PyTorch 会在 `trainer.py` 中回退到 **CPU**（仍建议显式使用 GPU 环境训练）。
+
+### 2.2.1 TensorBoard 看板
+
+训练过程中会记录（见 `tienkung_thermal/training/trainer.py`）：
+
+- **`train/loss_step`**：按间隔采样的 batch 损失（全局 step）
+- **`train/loss_epoch`**、**`val/loss`**：每 epoch 训练平均损失与验证集损失（与训练损失同一 `ThermalLoss`）
+- **`val/mae_15s_equal_weight`**、**`val/max_ae`**：15 s 视距等权 MAE（°C）与验证集最大绝对误差
+- **`train/lr`**：当前学习率
+- **`val/mae_15s_per_joint`**：12 关节在 15 s 视距上的 MAE（分组标量）
+
+另开终端执行（将 `DIR` 换为你的日志目录，或使用 `runs/` 以对比多次实验）：
+
+```bash
+tensorboard --logdir runs --port 6006
+```
+
+浏览器打开提示的 URL（通常为 `http://localhost:6006`）即可查看曲线。
 
 ### 2.3 常用示例
 
@@ -53,6 +73,10 @@ python scripts/train.py --config configs/ultra_thermal_lstm.yaml \
 # 显存紧张：减小 batch，必要时再缩短序列长度做试验
 python scripts/train.py --config configs/ultra_thermal_lstm.yaml --raw-only --device cuda \
   --batch-size 32 --seq-len 2500
+
+# TensorBoard：训练时加 --tensorboard 或 --tensorboard-dir runs/my_exp
+# 另开终端：tensorboard --logdir runs --port 6006
+python scripts/train.py --config configs/ultra_thermal_lstm.yaml --tensorboard
 ```
 
 ---

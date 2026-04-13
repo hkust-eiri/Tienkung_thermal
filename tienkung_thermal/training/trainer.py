@@ -9,6 +9,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -69,12 +70,13 @@ def evaluate(
     loader: DataLoader,
     device: torch.device,
     horizon_idx_15s: int = -1,
-) -> dict[str, float]:
+    criterion: nn.Module | None = None,
+) -> dict[str, Any]:
     """在验证/测试集上计算指标。
 
     Returns
     -------
-    dict 含 val_loss, val_mae_15s_equal_weight, val_max_ae 等。
+    dict 含 val_mae_15s_equal_weight、val_max_ae；若传入 ``criterion`` 则另含 ``val_loss``。
     """
     model.eval()
     total_ae_sum = 0.0
@@ -82,10 +84,15 @@ def evaluate(
     count_per_joint = torch.zeros(12, device=device)
     max_ae = 0.0
     n_samples = 0
+    total_val_loss = 0.0
+    n_loss_batches = 0
 
     for x, ji, y in loader:
         x, ji, y = x.to(device), ji.to(device), y.to(device)
         pred = model(x, ji)
+        if criterion is not None:
+            total_val_loss += criterion(pred, y, ji).item()
+            n_loss_batches += 1
         ae = (pred - y).abs()
         ae_15s = ae[:, horizon_idx_15s]  # (B,)
         for j in range(12):
@@ -104,12 +111,15 @@ def evaluate(
     active = count_per_joint > 0
     mae_15s_eq = mae_per_joint[active].mean().item() if active.any() else float("inf")
 
-    return {
+    out: dict[str, float | list[float]] = {
         "val_mae_15s_equal_weight": mae_15s_eq,
         "val_mae_per_joint_15s": mae_per_joint.cpu().tolist(),
         "val_max_ae": max_ae,
-        "val_n_samples": n_samples,
+        "val_n_samples": float(n_samples),
     }
+    if n_loss_batches > 0:
+        out["val_loss"] = total_val_loss / n_loss_batches
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +144,8 @@ class TrainConfig:
     huber_delta: float = 1.0
     joint_weights: list[float] = field(default_factory=lambda: [1.0] * 12)
     checkpoint_dir: str = "checkpoints"
+    #: 若设置，则写入 TensorBoard 标量（``tensorboard --logdir <该目录>``）
+    tensorboard_dir: str | None = None
 
 
 def train(
@@ -164,11 +176,25 @@ def train(
     ckpt_dir.mkdir(parents=True, exist_ok=True)
     best_path = ckpt_dir / "best_ultra_thermal.pt"
 
+    writer = None
+    if cfg.tensorboard_dir:
+        try:
+            from torch.utils.tensorboard import SummaryWriter
+        except ImportError as e:
+            raise ImportError(
+                "启用 TensorBoard 需要安装 tensorboard 包：pip install tensorboard"
+            ) from e
+        tb_path = Path(cfg.tensorboard_dir)
+        tb_path.mkdir(parents=True, exist_ok=True)
+        writer = SummaryWriter(log_dir=str(tb_path))
+        logger.info("TensorBoard log_dir=%s", tb_path.resolve())
+
     best_gate = float("inf")
     patience = 0
 
     total_train_batches = len(train_loader)
     log_every = max(1, total_train_batches // 20)  # ~5% 打印一次
+    global_step = 0
 
     for epoch in range(1, cfg.max_epochs + 1):
         t0 = time.time()
@@ -188,6 +214,10 @@ def train(
 
             epoch_loss += loss.item()
             n_batches += 1
+            global_step += 1
+
+            if writer is not None and n_batches % log_every == 0:
+                writer.add_scalar("train/loss_step", loss.item(), global_step)
 
             if n_batches % log_every == 0:
                 pct = 100.0 * n_batches / total_train_batches
@@ -201,14 +231,31 @@ def train(
         scheduler.step()
         avg_loss = epoch_loss / max(n_batches, 1)
 
-        metrics = evaluate(model, val_loader, device)
-        gate = metrics["val_mae_15s_equal_weight"]
+        metrics = evaluate(model, val_loader, device, criterion=criterion)
+        gate = float(metrics["val_mae_15s_equal_weight"])
         elapsed = time.time() - t0
 
         logger.info(
             "epoch %3d | train_loss %.4f | val_mae_15s %.4f°C | max_ae %.2f°C | %.1fs",
-            epoch, avg_loss, gate, metrics["val_max_ae"], elapsed,
+            epoch, avg_loss, gate, float(metrics["val_max_ae"]), elapsed,
         )
+
+        if writer is not None:
+            writer.add_scalar("train/loss_epoch", avg_loss, epoch)
+            if "val_loss" in metrics:
+                writer.add_scalar("val/loss", float(metrics["val_loss"]), epoch)
+            writer.add_scalar("val/mae_15s_equal_weight", gate, epoch)
+            writer.add_scalar("val/max_ae", float(metrics["val_max_ae"]), epoch)
+            writer.add_scalar(
+                "train/lr", optimizer.param_groups[0]["lr"], epoch
+            )
+            per_j = metrics.get("val_mae_per_joint_15s")
+            if isinstance(per_j, list) and len(per_j) == 12:
+                writer.add_scalars(
+                    "val/mae_15s_per_joint",
+                    {f"j{j}": float(v) for j, v in enumerate(per_j)},
+                    epoch,
+                )
 
         if gate < best_gate:
             best_gate = gate
@@ -228,6 +275,10 @@ def train(
             if patience >= cfg.early_stopping_patience:
                 logger.info("early stopping at epoch %d (patience=%d)", epoch, patience)
                 break
+
+    if writer is not None:
+        writer.flush()
+        writer.close()
 
     logger.info("training done — best val_mae_15s = %.4f°C", best_gate)
     return best_path

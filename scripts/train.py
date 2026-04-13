@@ -13,11 +13,15 @@
 
     # 指定 GPU
     python scripts/train.py --config configs/ultra_thermal_lstm.yaml --device cuda:1
+
+    # TensorBoard（另开终端: tensorboard --logdir runs）
+    python scripts/train.py --config configs/ultra_thermal_lstm.yaml --tensorboard
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import logging
 import sys
 from pathlib import Path
@@ -121,6 +125,18 @@ def main() -> None:
         metavar="S",
         help="滑窗步长（帧数），默认 50（0.1s@500Hz）；stride=1 为逐帧，样本最多但极慢",
     )
+    parser.add_argument(
+        "--tensorboard-dir",
+        type=str,
+        default=None,
+        metavar="DIR",
+        help="TensorBoard 事件文件目录；设置后记录 loss / MAE / lr 等（需 pip install tensorboard）",
+    )
+    parser.add_argument(
+        "--tensorboard",
+        action="store_true",
+        help="启用 TensorBoard，日志写入 仓库根 runs/ultra_thermal_<时间戳>/（与 --tensorboard-dir 二选一优先使用后者）",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -150,6 +166,15 @@ def main() -> None:
     if use_imu:
         d += 9
     log.info("feature mode: use_derived=%s use_adj=%s use_imu=%s → D=%d", use_derived, use_adj, use_imu, d)
+
+    tb_dir = args.tensorboard_dir
+    if tb_dir is None and args.tensorboard:
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        tb_dir = str(_REPO / "runs" / f"ultra_thermal_{ts}")
+    elif tb_dir is not None:
+        tb_dir = str(Path(tb_dir).expanduser().resolve())
+    else:
+        tb_dir = None
 
     import torch
     from torch.utils.data import DataLoader
@@ -183,6 +208,9 @@ def main() -> None:
     if len(train_ds) == 0:
         log.error("train dataset is empty — check h5 files and seq_len/horizon")
         sys.exit(1)
+
+    if tb_dir:
+        log.info("TensorBoard log dir: %s", tb_dir)
 
     batch_size = (
         args.batch_size
@@ -220,6 +248,7 @@ def main() -> None:
     log.info("model: UltraThermalLSTM  params=%d  input_dim=%d", n_params, d)
 
     device = args.device or train_cfg.get("device", "cuda")
+
     tcfg = TrainConfig(
         lr=train_cfg.get("lr", 1e-3),
         weight_decay=train_cfg.get("weight_decay", 1e-4),
@@ -235,6 +264,7 @@ def main() -> None:
         huber_delta=loss_cfg.get("huber_delta", 1.0),
         joint_weights=loss_cfg.get("joint_weights", [1.0] * 12),
         checkpoint_dir=args.checkpoint_dir,
+        tensorboard_dir=tb_dir,
     )
 
     best_ckpt = train(model, train_loader, val_loader, tcfg)

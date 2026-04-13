@@ -11,6 +11,7 @@ pyyaml>=6.0
 # --- 训练 / 模型 / HDF5 数据集 ---
 torch>=2.0
 h5py>=3.8
+tensorboard>=2.10
 
 # --- rosbag2 解码与导出 ---
 rosbags>=0.9
