@@ -51,7 +51,7 @@ class UltraThermalDataset(Dataset):
     seq_len : 输入窗口长度（帧数）
     horizon_steps : 各视距对应的未来步数列表
     stride : 滑窗步长（帧数），默认 50（0.1s@500Hz）
-    norm_stats : {"mean": Tensor, "std": Tensor} 或 None
+    norm_stats : {"mean": ndarray(36,), "std": ndarray(36,)} 或 None
     """
 
     def __init__(
@@ -89,6 +89,28 @@ class UltraThermalDataset(Dataset):
             total += n_windows
 
         self._total = total
+
+    def compute_norm_stats(self) -> dict[str, np.ndarray]:
+        """从所有 session 的全部帧计算 per-feature mean/std (36,)。"""
+        sums = np.zeros(N_JOINTS * D_PER_JOINT, dtype=np.float64)
+        sq_sums = np.zeros_like(sums)
+        n_total = 0
+        for cache in self._caches:
+            n = cache.n_frames
+            for j in range(N_JOINTS):
+                for fi, field in enumerate(JOINT_FIELDS):
+                    col_idx = j * D_PER_JOINT + fi
+                    col = cache.joints[field][:, j].astype(np.float64)
+                    sums[col_idx] += col.sum()
+                    sq_sums[col_idx] += (col ** 2).sum()
+            n_total += n
+        mean = sums / n_total
+        std = np.sqrt(sq_sums / n_total - mean ** 2)
+        std = np.maximum(std, 1e-6)  # 防止除零
+        return {"mean": mean.astype(np.float32), "std": std.astype(np.float32)}
+
+    def set_norm_stats(self, stats: dict[str, np.ndarray]) -> None:
+        self.norm_stats = stats
 
     def __len__(self) -> int:
         return self._total
@@ -133,6 +155,8 @@ class UltraThermalDataset(Dataset):
 
         x_t = torch.from_numpy(x)
         if self.norm_stats is not None:
-            x_t = (x_t - self.norm_stats["mean"]) / (self.norm_stats["std"] + 1e-8)
+            mean = torch.from_numpy(self.norm_stats["mean"])
+            std = torch.from_numpy(self.norm_stats["std"])
+            x_t = (x_t - mean) / std
 
         return x_t, torch.from_numpy(target)

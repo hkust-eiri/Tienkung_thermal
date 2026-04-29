@@ -16,16 +16,20 @@ import torch.nn as nn
 
 
 class UltraThermalLSTM(nn.Module):
-    """共享骨干 + 12 关节独立输出头的因果 LSTM（全关节联合输入/联合预测）。"""
+    """共享骨干 + 共享解码头的因果 LSTM（全关节联合输入/联合预测）。
+
+    解码头为共享 MLP，一次性输出全部 12 关节 × H 视距的预测，
+    使关节间的热耦合关系在解码阶段也被显式建模。
+    """
 
     def __init__(
         self,
         input_dim: int = 36,
-        proj_dim: int = 32,
-        hidden_dim: int = 96,
+        proj_dim: int = 64,
+        hidden_dim: int = 512,
         num_layers: int = 2,
-        dropout: float = 0.10,
-        mid_dim: int = 64,
+        dropout: float = 0.15,
+        mid_dim: int = 128,
         horizon: int = 9,
         n_joints: int = 12,
     ) -> None:
@@ -45,15 +49,11 @@ class UltraThermalLSTM(nn.Module):
             batch_first=True,
             dropout=dropout if num_layers > 1 else 0.0,
         )
-        self.heads = nn.ModuleList(
-            [
-                nn.Sequential(
-                    nn.Linear(hidden_dim, mid_dim),
-                    nn.GELU(),
-                    nn.Linear(mid_dim, horizon),
-                )
-                for _ in range(n_joints)
-            ]
+        out_dim = n_joints * horizon  # 12 × 9 = 108
+        self.decoder = nn.Sequential(
+            nn.Linear(hidden_dim, mid_dim),
+            nn.GELU(),
+            nn.Linear(mid_dim, out_dim),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -69,7 +69,5 @@ class UltraThermalLSTM(nn.Module):
         x = self.input_proj(x)
         lstm_out, _ = self.lstm(x)
         h_last = lstm_out[:, -1, :]  # (B, hidden_dim)
-        all_preds = torch.stack(
-            [head(h_last) for head in self.heads], dim=1
-        )  # (B, n_joints, H)
-        return all_preds
+        flat = self.decoder(h_last)  # (B, n_joints * H)
+        return flat.view(-1, self.n_joints, self.horizon)  # (B, 12, 9)

@@ -219,26 +219,131 @@ def export_bag_to_hdf5(
     typestore = make_humble_typestore(list(msg_package_roots))
 
     topic = "/leg/status"
-    with AnyReader([bag_dir.resolve()], default_typestore=typestore) as reader:
-        conns = [c for c in reader.connections if c.topic == topic]
-        if not conns:
-            raise RuntimeError(f"{bag_dir} 中无 topic {topic}")
-        for conn, ts, raw in reader.messages(connections=conns):
-            stats.n_messages_total += 1
-            try:
-                msg = reader.deserialize(raw, conn.msgtype)
-            except Exception as err:  # noqa: BLE001
-                print(f"警告: 反序列化失败 @ts={ts}: {err}", file=log)
-                continue
-            parsed = parse_motor_status_msg_to_row(
-                msg, ct_scale_per_t_leg, stats, fallback_ts_ns=int(ts)
+
+    def _read_shard_via_tmpdir(db3_path: Path) -> None:
+        """为单个 db3 创建临时 bag 目录，用 AnyReader 读取。"""
+        import sqlite3 as _sql
+        import tempfile
+        import yaml as _yaml
+
+        conn = _sql.connect(str(db3_path))
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [r[0] for r in cur.fetchall()]
+        if "topics" not in tables or "messages" not in tables:
+            conn.close()
+            raise RuntimeError("missing tables")
+        cur.execute("SELECT COUNT(*) FROM messages")
+        if cur.fetchone()[0] == 0:
+            conn.close()
+            raise RuntimeError("empty shard")
+
+        cur.execute(
+            "SELECT name, type, serialization_format, offered_qos_profiles FROM topics"
+        )
+        topic_rows = cur.fetchall()
+        conn.close()
+
+        topics_meta = []
+        for tname, ttype, ser_fmt, qos in topic_rows:
+            topics_meta.append({
+                "topic_metadata": {
+                    "name": tname,
+                    "type": ttype,
+                    "serialization_format": ser_fmt or "cdr",
+                    "offered_qos_profiles": qos or "",
+                },
+                "message_count": 0,
+            })
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            link = tmp / db3_path.name
+            link.symlink_to(db3_path.resolve())
+            mini_meta = {
+                "rosbag2_bagfile_information": {
+                    "version": 5,
+                    "storage_identifier": "sqlite3",
+                    "relative_file_paths": [db3_path.name],
+                    "duration": {"nanoseconds": 0},
+                    "starting_time": {"nanoseconds_since_epoch": 0},
+                    "message_count": 0,
+                    "topics_with_message_count": topics_meta,
+                    "compression_format": "",
+                    "compression_mode": "",
+                }
+            }
+            (tmp / "metadata.yaml").write_text(
+                _yaml.dump(mini_meta, default_flow_style=False, sort_keys=False)
             )
-            if parsed is None:
-                continue
-            t_sec, row = parsed
-            t_list.append(t_sec)
-            for k in acc:
-                acc[k].append(row[k])
+            with AnyReader([tmp], default_typestore=typestore) as reader:
+                conns = [c for c in reader.connections if c.topic == topic]
+                if not conns:
+                    return
+                for conn_obj, ts, raw in reader.messages(connections=conns):
+                    stats.n_messages_total += 1
+                    try:
+                        msg = reader.deserialize(raw, conn_obj.msgtype)
+                    except Exception as err:  # noqa: BLE001
+                        print(f"警告: 反序列化失败 @ts={ts}: {err}", file=log)
+                        continue
+                    parsed = parse_motor_status_msg_to_row(
+                        msg, ct_scale_per_t_leg, stats, fallback_ts_ns=int(ts)
+                    )
+                    if parsed is None:
+                        continue
+                    t_sec, row = parsed
+                    t_list.append(t_sec)
+                    for k in acc:
+                        acc[k].append(row[k])
+
+    try:
+        with AnyReader([bag_dir.resolve()], default_typestore=typestore) as reader:
+            conns = [c for c in reader.connections if c.topic == topic]
+            if not conns:
+                raise RuntimeError(f"{bag_dir} 中无 topic {topic}")
+            for conn, ts, raw in reader.messages(connections=conns):
+                stats.n_messages_total += 1
+                try:
+                    msg = reader.deserialize(raw, conn.msgtype)
+                except Exception as err:  # noqa: BLE001
+                    print(f"警告: 反序列化失败 @ts={ts}: {err}", file=log)
+                    continue
+                parsed = parse_motor_status_msg_to_row(
+                    msg, ct_scale_per_t_leg, stats, fallback_ts_ns=int(ts)
+                )
+                if parsed is None:
+                    continue
+                t_sec, row = parsed
+                t_list.append(t_sec)
+                for k in acc:
+                    acc[k].append(row[k])
+    except Exception as whole_bag_err:
+        print(f"  整包读取失败 ({whole_bag_err})，尝试逐 shard 恢复...", file=log)
+        stats.n_messages_total = 0
+        stats.n_valid_raw = 0
+        stats.n_skipped_bad_status_len = 0
+        stats.n_skipped_unknown_can = 0
+        stats.n_skipped_error_nonzero = 0
+        stats.n_skipped_incomplete_12 = 0
+        t_list.clear()
+        for k in acc:
+            acc[k].clear()
+
+        db3_files = sorted(bag_dir.glob("*.db3"))
+        n_shards_ok = 0
+        n_shards_bad = 0
+        for db3 in db3_files:
+            try:
+                _read_shard_via_tmpdir(db3)
+                n_shards_ok += 1
+            except Exception as shard_err:  # noqa: BLE001
+                n_shards_bad += 1
+                print(f"  跳过损坏 shard {db3.name}: {shard_err}", file=log)
+        print(
+            f"  shard 恢复: {n_shards_ok} 正常, {n_shards_bad} 损坏已跳过",
+            file=log,
+        )
 
     if stats.n_valid_raw < 2:
         raise RuntimeError(

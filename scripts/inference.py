@@ -51,11 +51,16 @@ def main() -> None:
     parser.add_argument("--raw-only", action="store_true")
     parser.add_argument("--device", default=None)
     parser.add_argument("--output", default=None, help="CSV 输出路径（滑窗模式）")
+    parser.add_argument("--plot", action="store_true", help="滑窗模式：生成预测 vs 实际温度对比图")
+    parser.add_argument("--plot-output", default=None, help="图片保存路径（默认显示窗口）")
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args()
 
     if not args.sliding and args.start_frame is None:
         parser.error("单窗口模式需要 --start-frame；或使用 --sliding 进行滑窗推理")
+
+    if args.plot_output:
+        args.plot = True
 
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
@@ -251,6 +256,70 @@ def main() -> None:
             print(",".join(f"{v:.4f}" for v in row))
         if len(rows) > 20:
             print(f"... ({len(rows)} rows total, use --output to save all)")
+
+    # ── 绘图 ──────────────────────────────────────────────
+    if args.plot and rows:
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        data = np.array(rows)
+        time_arr = data[:, 0]
+        actual_now = data[:, 1]
+
+        plot_horizons = [0.5, 1.0, 5.0, 15.0]
+        horizon_indices = []
+        for target in plot_horizons:
+            best_i = min(range(len(horizon_seconds)), key=lambda i: abs(horizon_seconds[i] - target))
+            if best_i not in [hi for hi, _ in horizon_indices]:
+                horizon_indices.append((best_i, horizon_seconds[best_i]))
+
+        fig, axes = plt.subplots(len(horizon_indices) + 1, 1, figsize=(14, 3 * (len(horizon_indices) + 1)), sharex=True)
+        if len(horizon_indices) + 1 == 1:
+            axes = [axes]
+
+        colors = plt.cm.tab10.colors
+
+        axes[0].plot(time_arr, actual_now, color="black", linewidth=0.8, label="Actual (now)")
+        axes[0].set_ylabel("Temp (°C)")
+        axes[0].set_title(f"Joint {joint} — Current Temperature")
+        axes[0].legend(loc="upper right", fontsize=8)
+        axes[0].grid(True, alpha=0.3)
+
+        for plot_i, (h_idx, h_sec) in enumerate(horizon_indices):
+            ax = axes[plot_i + 1]
+            pred_col = data[:, 2 + h_idx]
+
+            shifted_time = time_arr + h_sec
+            actual_future = []
+            for t_s in shifted_time:
+                frame = int(t_s * sample_rate)
+                frame = min(frame, cache.n_frames - 1)
+                actual_future.append(float(cache.joints["temperature"][frame, joint]))
+            actual_future = np.array(actual_future)
+
+            ax.plot(shifted_time, actual_future, color="black", linewidth=0.8, label=f"Actual (t+{h_sec:.1f}s)")
+            ax.plot(shifted_time, pred_col, color=colors[plot_i % len(colors)], linewidth=0.8, alpha=0.85, label=f"Pred @{h_sec:.1f}s")
+            ax.fill_between(shifted_time, actual_future, pred_col, alpha=0.15, color=colors[plot_i % len(colors)])
+
+            mae = np.mean(np.abs(actual_future - pred_col))
+            ax.set_ylabel("Temp (°C)")
+            ax.set_title(f"Horizon {h_sec:.1f}s — MAE={mae:.3f}°C")
+            ax.legend(loc="upper right", fontsize=8)
+            ax.grid(True, alpha=0.3)
+
+        axes[-1].set_xlabel("Time (s)")
+        fig.suptitle(f"UltraThermalLSTM — Joint {joint} — {Path(args.h5).stem}", fontsize=12, y=1.01)
+        fig.tight_layout()
+
+        if args.plot_output:
+            plot_path = Path(args.plot_output)
+        else:
+            plot_path = Path(f"pred_j{joint}.png")
+        plot_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(str(plot_path), dpi=150, bbox_inches="tight")
+        log.info("plot saved -> %s", plot_path)
+        plt.close(fig)
 
 
 if __name__ == "__main__":

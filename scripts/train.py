@@ -158,6 +158,20 @@ def main() -> None:
         log.error("train dataset is empty — check h5 files and seq_len/horizon")
         sys.exit(1)
 
+    # 计算训练集归一化统计量并应用到 train/val
+    norm_stats = train_ds.compute_norm_stats()
+    log.info("norm stats computed: mean range [%.2f, %.2f], std range [%.4f, %.4f]",
+             norm_stats["mean"].min(), norm_stats["mean"].max(),
+             norm_stats["std"].min(), norm_stats["std"].max())
+    train_ds.set_norm_stats(norm_stats)
+    val_ds.set_norm_stats(norm_stats)
+
+    # 保存归一化统计量供推理时使用（转为 tensor 以兼容 weights_only=True）
+    norm_path = Path(args.checkpoint_dir) / "norm_stats.pt"
+    norm_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"mean": torch.from_numpy(norm_stats["mean"]), "std": torch.from_numpy(norm_stats["std"])}, norm_path)
+    log.info("norm stats saved → %s", norm_path)
+
     batch_size = (
         args.batch_size
         if args.batch_size is not None

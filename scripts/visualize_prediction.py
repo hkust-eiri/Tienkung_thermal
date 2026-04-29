@@ -72,6 +72,10 @@ def main():
         "--joints", default=None,
         help="要画的关节索引，逗号分隔，如 '2,3,8,9'；默认画全部 12 个",
     )
+    parser.add_argument(
+        "--norm-stats", default=None,
+        help="归一化统计量路径（默认自动查找 checkpoint 同目录下的 norm_stats.pt）",
+    )
     args = parser.parse_args()
 
     import torch
@@ -88,6 +92,20 @@ def main():
     model.load_state_dict(ckpt["model_state_dict"])
     model.to(device).eval()
     print(f"loaded checkpoint: epoch={ckpt.get('epoch')}, val_mae_15s={ckpt.get('val_mae_15s', '?'):.4f}°C")
+
+    # 加载归一化统计量
+    norm_path = args.norm_stats
+    if norm_path is None:
+        norm_path = str(Path(args.checkpoint).parent / "norm_stats.pt")
+    if Path(norm_path).exists():
+        norm_stats = torch.load(norm_path, map_location="cpu", weights_only=False)
+        norm_mean = np.asarray(norm_stats["mean"], dtype=np.float32)
+        norm_std = np.asarray(norm_stats["std"], dtype=np.float32)
+        print(f"loaded norm stats from {norm_path}")
+    else:
+        norm_mean = None
+        norm_std = None
+        print("WARNING: no norm_stats found, running without normalization")
 
     # 加载数据
     data = load_session(args.h5)
@@ -115,6 +133,8 @@ def main():
 
         for start_t in starts:
             x = build_input(data, start_t)
+            if norm_mean is not None:
+                x = (x - norm_mean) / norm_std
             batch_inputs.append(x)
             batch_starts.append(start_t)
 

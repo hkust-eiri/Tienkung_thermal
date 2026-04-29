@@ -398,6 +398,109 @@ Dataset 不再默认：
 - **跳过原因**：`metadata.yaml` **缺失或为空**、无 `rosbag2_bagfile_information`、无 `.db3` 时 **不调用 rosbags**（否则会 `NoneType`）；需补全元数据或重新录制。已成功导出的 session 其 HDF5 内 `joints/*` 形状为 `(N, 12)`，`timestamps` 为秒、步长 0.002 s。  
 - **`ct_scale` 多版本**：编辑 `configs/ct_scale_profiles.yaml` 的 `profiles` + `profile_rules`（按 `rosbag2_*` 目录名 **prefix** 匹配）；当前占位为 **default 全 1.0**，实机系数需从 **`tg22_config.yaml` 腿段前 12 项** 填入对应 profile。
 
+### 2026-04-15 — `bag0413` metadata.yaml 补全与数据集导出命令
+
+#### 问题
+
+`data/bags/bag0413/` 下 47 个 `rosbag2_*` 目录中，**14 个缺失** `metadata.yaml`、**8 个为空文件**（0 字节）。`ros2 bag reindex` 在 Humble 上触发 segfault，无法使用。
+
+#### 修复
+
+使用 `scripts/bags/rebuild_metadata.py` 从 `.db3` 的 SQLite `topics` / `messages` 表直接重建 `metadata.yaml`。22 个目录全部修复成功。
+
+```bash
+python scripts/bags/rebuild_metadata.py data/bags/bag0413
+```
+
+> **注意**：8 个 `.db3` 文件存在 `database disk image is malformed`，对应 file entry 记录为 0 条消息，其余数据完整。
+
+#### 数据集导出命令
+
+补全 metadata 后，即可将 `bag0413` 处理为 500 Hz HDF5 数据集：
+
+```bash
+cd /home/js/robot/Tienkung_thermal
+pip install -e ".[rosbag]"
+
+# 批量处理 bag0413 全部 bag
+python scripts/bags/export_leg_status_dataset.py \
+  --bags-root data/bags/bag0413 \
+  --out-dir data/processed/leg_status_500hz \
+  --msg-package /home/js/robot/Tienkung/ros2ws/install/bodyctrl_msgs/share/bodyctrl_msgs \
+  --ct-scale-config configs/ct_scale_profiles.yaml \
+  --manifest data/processed/leg_status_500hz/manifest.csv
+
+# 单个 bag
+python scripts/bags/export_leg_status_dataset.py \
+  data/bags/bag0413/rosbag2_2026_04_07-12_14_44 \
+  --out-dir data/processed/leg_status_500hz \
+  --msg-package /home/js/robot/Tienkung/ros2ws/install/bodyctrl_msgs/share/bodyctrl_msgs
+```
+
+| 参数 | 说明 |
+|:-----|:-----|
+| `--bags-root` | 批量模式，扫描目录下所有 `rosbag2_*` 子目录 |
+| `--msg-package` | `bodyctrl_msgs` 消息定义路径（脚本会自动探测默认路径） |
+| `--ct-scale-config` | 力矩系数配置，影响 `tau_est` 计算 |
+| `--manifest` | 输出索引 CSV |
+| `--skip-existing` | 跳过已有 `.h5` 的 session，仅补写 manifest |
+
 ---
 
 *与 `plan.md` 同步；待获取项澄清后可迁入 `plan.md` §1.3–1.4 白名单。*
+
+---
+
+## 11. 输出头架构备选方案（待消融验证）
+
+当前采用**方案 1（共享解码头）**，以下记录备选方案供后续消融实验参考。
+
+### 当前：方案 1 — 共享解码 + reshape
+
+```text
+h_last (512) → Linear(512→128) → GELU → Linear(128→108) → reshape → (12, 9)
+```
+
+- 一个共享 MLP 直接输出 `12×9=108` 维，reshape 为 `(12, 9)`
+- 关节间的热耦合关系通过共享权重矩阵隐式建模：`Linear(128→108)` 的权重矩阵中，每个关节的 9 行可以"看到"同一组 128 维中间特征，这些特征编码了全局姿态信息
+- 优点：参数最少（decoder 仅 ~80K），结构最简单，训练稳定
+- 缺点：关节特异性完全依赖最后一层线性映射的不同行，表达能力有限
+
+### 备选：方案 2 — 独立头 + 跨关节注意力
+
+```text
+h_last (512) → 12 × MLP Head → 初步预测 (12, 9)
+                                      ↓
+                              Multi-Head Self-Attention (12 tokens, dim=9)
+                                      ↓
+                              修正后预测 (12, 9)
+```
+
+- 保留 12 个独立头做初步解码，然后加一层跨关节 self-attention
+- 把 12 个关节视为 12 个 token，每个 token 是 9 维（H 个视距预测）
+- attention 让每个关节的预测能参考其他关节的预测来修正自己
+- 优点：保留关节特异性的同时显式建模关节间交互
+- 缺点：参数量较大（独立头 ~800K + attention），训练复杂度增加
+
+### 备选：方案 3 — 先共享交互再分头
+
+```text
+h_last (512) → Shared MLP (512→512) → GELU
+                                      ↓
+                              12 × Light Head (512→9)
+                                      ↓
+                              (12, 9)
+```
+
+- LSTM 输出后先过一个共享的"关节交互 MLP"（512→512），让全局信息进一步混合
+- 然后 12 个轻量头（仅一层 Linear(512→9)）各自解码
+- 优点：交互层参数共享，轻量头保留关节差异
+- 缺点：交互层是全连接，没有关节拓扑先验
+
+### 消融建议
+
+| 实验 | 方案 | 关注指标 |
+|:-----|:-----|:---------|
+| D1 | 方案 1（当前） vs 旧版 12 独立头 | 15s MAE、per-joint MAE 方差 |
+| D2 | 方案 1 vs 方案 2（+attention） | 15s MAE、训练时间 |
+| D3 | 方案 1 vs 方案 3（共享交互+轻量头） | 15s MAE、参数量 |

@@ -11,11 +11,11 @@ model:
   class: ultra_thermal_lstm
   input_dim: 36           # 12 joints × 3 features (q, dq, T)
   d_per_joint: 3          # q, dq, T
-  proj_dim: 32
-  hidden_dim: 96
+  proj_dim: 64            # 输入投影维度
+  hidden_dim: 512         # LSTM 隐层神经元数
   num_layers: 2
-  dropout: 0.10
-  mid_dim: 64
+  dropout: 0.15           # 网络变大，适当提高 dropout
+  mid_dim: 128            # 输出头中间层维度
   horizon: 9
   n_joints: 12
 
