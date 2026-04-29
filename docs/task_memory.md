@@ -1,3 +1,9 @@
+## 任务记忆文档
+
+
+
+
+
 # TienKung Ultra 腿部热建模 — 任务记忆（关键信息汇总）
 
 > **关节顺序（唯一准则）**：以 **Ultra** 为准（`TienKung-Lab/legged_lab/envs/ultra/ultra_env.py` 中 `find_joints`）；**禁止**用 Deploy 腿向量下标代替 `T_leg[i]`。  
@@ -504,3 +510,46 @@ h_last (512) → Shared MLP (512→512) → GELU
 | D1 | 方案 1（当前） vs 旧版 12 独立头 | 15s MAE、per-joint MAE 方差 |
 | D2 | 方案 1 vs 方案 2（+attention） | 15s MAE、训练时间 |
 | D3 | 方案 1 vs 方案 3（共享交互+轻量头） | 15s MAE、参数量 |
+
+---
+
+### 2026-04-30 — IsaacLab（`TienKung-Lab`）rosbag 回放：尝试/放弃/最终方案（工程备忘）
+
+#### 背景与目标分裂（为什么会换路线）
+
+- **最初诉求**：希望“播放 bag 里的全部 ROS 控制信息”，在 IsaacSim 里 **完整复现实机动作**。  
+  - **结论**：除非 bag 同时包含可靠的 **机体 world pose / odometry / TF**（本仓库这批 bag 的 `metadata.yaml` 未见 `/tf`、`/odom` 等），否则无法在仿真里严格复刻 **位移轨迹与接触细节**；最多做到两类近似回放：
+    - **关节回放**：回放 `/leg/status` 的关节状态；
+    - **遥控回放 + policy**：回放遥控器输入（SBUS/Joy），动作由策略输出。
+- **`Tienkung_thermal` 侧**：仍以 **`rosbag → HDF5`**（`/leg/status`，500 Hz）训练链路为准（见本章前文导出脚本）；本节聚焦 **`TienKung-Lab` 回放脚本**。
+
+#### A. 尝试：直接用 ROS2 `ros2 bag play` / rosbags 解码驱动仿真（放弃）
+
+- **放弃原因**：IsaacLab 环境并非 ROS 节点链路；要实现等价效果仍要写桥接（topic→Articulation/command），工作量不比离线回放脚本更小，因此未采用。
+
+#### B. 关节回放：`/leg/status` → Ultra 腿部 DOF（保留为 baseline）
+
+- **脚本**：`TienKung-Lab/legged_lab/scripts/replay_leg_status_rosbag.py`
+- **做了什么**：解码 `/leg/status`，按 CAN→Ultra（`T_leg[0..11]`，`CAN 髋部 R–P–Y → Ultra R–Y–P` 交叉已在映射表体现）→ `set_joint_position_target`。
+- **踩坑与修复**：
+  - **`omni.client` / IsaacLab import 顺序**：不要在 Kit 启动前 import IsaacLab（否则会缺 `omni.*`）；脚本改为 **`AppLauncher` 之后再 `import legged_lab.envs`**。
+  - **`scene.seed`**：`UltraEnv` 读取 `cfg.scene.seed`，但 `BaseSceneCfg` 未必声明字段；脚本在创建 env 前 **`setattr(scene, "seed", ...)`**。
+  - **`bodyctrl_msgs` 路径**：install/share 目录层级容易传错；脚本增强 **`package.xml` 解析**（XML 优先 + 正则兜底）与 **install/share 自动定位**。
+  - **多 shard / 坏 shard**：示例 bag 存在 **0 字节 `.db3`**；脚本支持 **逐 shard 跳过损坏 shard**。
+- **局限**：更像“回放关节角”；机身位移不一定一致。
+
+#### C. 遥控回放 + policy：SBUS/Joy → `UniformVelocityCommand.command` → `exported/policy.pt`（当前主线）
+
+- **脚本**：`TienKung-Lab/legged_lab/scripts/replay_sbus_policy_rosbag.py`
+- **尝试了两种遥控解码方式**：
+  - **`/sbus_data` (`Joy`)**：可用但对轴索引/缩放敏感，容易出现“像在播放但其实 command 很小/轴错位”。  
+    → **不作为默认**，仅在明确校准后用 `--input-format joy`。
+  - **`/sbus_data/event` (`SbusData`)**：字段结构更清晰（`x1/y1/x2/y2`），更适合作为回放输入（仍需缩放/yaw 字段选择与实机一致）。
+    → **`--input-format auto` + `--msg-package bodyctrl_msgs`** 时优先走 event（脚本默认倾向）。
+- **放弃/避免的 IsaacLab 行为（否则会“看起来像刷新/命令无效”）**：
+  - **`UniformVelocityCommand` 的内部采样**：回放时必须禁用随机重采样；脚本 override `command_generator.compute`，并把 **`heading_command=False`、`rel_heading_envs=0`、`rel_standing_envs=0`**，避免写入 command 后被改写。
+  - **`UltraEnv` episode timeout**：表现为周期性 reset；脚本 **拉长 `scene.max_episode_length_s`（按 bag duration + margin）**，并 **移除纯 timeout reset**（保留摔倒等终止 reset）。
+- **TorchScript policy 设备**：`exported/policy.pt` 内含 normalizer+actor；修复 **`cpu vs cuda`**：脚本 **`policy.to(env.device)`**，并对 obs `.to(env.device)`。
+- **vx/vy “平面轴反向”问题（Joy/SBUS 常见）**：实测平面分量常与 IsaacLab base frame \(x/y\) **相差 90°**。  
+  → **最终写入代码默认值：`swap_vxy=True`**（不再需要每次 CLI 指定）；如需对齐原始映射可用 **`--no-swap-vxy`**。
+
